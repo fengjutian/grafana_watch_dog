@@ -3,9 +3,9 @@
 `grafana_watch_dog` 采用 Ports and Adapters 风格，UI、领域数据、Tauri IPC 和外部 MCP 进程之间没有循环依赖。
 
 ```text
-src/app
+src/app (providers and composition)
   ↓ uses
-src/domain ← src/infrastructure/tauri
+src/features/workspace → src/domain ← src/infrastructure/tauri
                      ↓ invoke
 src-tauri/lib (composition root)
   ├─ storage (SQLite)

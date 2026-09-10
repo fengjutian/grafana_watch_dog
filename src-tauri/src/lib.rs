@@ -192,6 +192,18 @@ fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
     GrafanaMcpClient::connect(mcp_config(&settings))?.list_tools()
 }
 
+#[tauri::command]
+fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Result<Value, String> {
+    if !settings
+        .mcp_args
+        .split_whitespace()
+        .any(|arg| arg == "--disable-write")
+    {
+        return Err("安全检查失败：MVP 必须使用 --disable-write".into());
+    }
+    GrafanaMcpClient::connect(mcp_config(&settings))?.call_tool(&name, arguments)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -206,7 +218,8 @@ pub fn run() {
             load_settings,
             save_settings,
             test_connection,
-            list_mcp_tools
+            list_mcp_tools,
+            call_mcp_tool
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grafana Watch Dog");

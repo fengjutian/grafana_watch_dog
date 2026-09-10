@@ -35,3 +35,8 @@ export async function listMcpTools(settings: AppSettings): Promise<McpTool[]> {
     { name: "list_alert_rules", description: "读取 Grafana 告警规则" },
   ];
 }
+
+export async function callMcpTool<T = unknown>(settings: AppSettings, name: string, args: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) throw new Error("MCP tool calls require the Tauri desktop runtime");
+  return invoke<T>("call_mcp_tool", { settings, name, arguments: args });
+}

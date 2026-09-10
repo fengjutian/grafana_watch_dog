@@ -77,6 +77,7 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 
 ```text
 src/app/                         应用入口、Provider 和顶层组合
+src/features/workspace/          当前工作台功能组合（后续按页面继续拆分）
 src/domain/report/               与框架无关的日报领域模型
 src/infrastructure/demo/         可替换的演示数据适配器
 src/infrastructure/tauri/        前端到 Tauri 的端口适配器
