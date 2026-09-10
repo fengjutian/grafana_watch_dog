@@ -179,7 +179,9 @@ fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-fn save_settings(app: tauri::AppHandle, mut settings: AppSettings) -> Result<(), String> {
+fn save_settings(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>, settings: AppSettings) -> Result<(), String> {
+    *runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
+    let mut settings = settings;
     // Secrets are deliberately excluded until an OS-keychain adapter is configured.
     settings.grafana_token.clear();
     settings.ai_key.clear();
@@ -244,6 +246,98 @@ fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Resul
     GrafanaMcpClient::connect(mcp_config(&settings))?.call_tool(&name, arguments)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MonitorRunResult {
+    checked: usize,
+    events: Vec<AlertEvent>,
+    errors: Vec<String>,
+    completed_at: String,
+}
+
+fn execute_monitor(app: &tauri::AppHandle, settings: &AppSettings) -> Result<MonitorRunResult, String> {
+    if settings.prometheus_datasource_uid.trim().is_empty() {
+        return Err("请先配置 Prometheus 数据源 UID".into());
+    }
+    if !settings.mcp_args.split_whitespace().any(|arg| arg == "--disable-write") {
+        return Err("安全检查失败：监控必须使用 --disable-write".into());
+    }
+    let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
+    let mut client = GrafanaMcpClient::connect(mcp_config(settings))?;
+    let now = Local::now();
+    let mut events = Vec::new();
+    let mut errors = Vec::new();
+
+    for rule in &settings.alert_rules {
+        let response = client.call_tool("query_prometheus", json!({
+            "datasourceUid": settings.prometheus_datasource_uid,
+            "expr": rule.expr,
+            "queryType": "instant",
+            "startTime": "now"
+        }));
+        let value = match response
+            .and_then(|value| extract_metric_values(&value))
+            .and_then(|values| rule.operator.aggregate(values.into_iter()).ok_or_else(|| "查询结果为空".into()))
+        {
+            Ok(value) => value,
+            Err(error) => { errors.push(format!("{}：{}", rule.name, error)); continue; }
+        };
+        let previous = conn.query_row(
+            "SELECT state_json FROM alert_states WHERE rule_id=?1", [&rule.id],
+            |row| row.get::<_, String>(0),
+        ).ok().and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
+        let (state, event) = evaluate(rule, value, previous, settings.alert_cooldown_minutes.max(0), now);
+        conn.execute(
+            "INSERT OR REPLACE INTO alert_states(rule_id,state_json) VALUES (?1,?2)",
+            params![rule.id, serde_json::to_string(&state).map_err(|e| e.to_string())?],
+        ).map_err(|e| e.to_string())?;
+        if let Some(event) = event {
+            let raw = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+            conn.execute(
+                "INSERT INTO alert_events(id,rule_id,kind,severity,message,event_json,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![event.id, event.rule_id, event.kind, event.severity, event.message, raw, event.created_at],
+            ).map_err(|e| e.to_string())?;
+            let _ = app.emit("monitor-alert", &event);
+            events.push(event);
+        }
+    }
+    Ok(MonitorRunResult { checked: settings.alert_rules.len(), events, errors, completed_at: now.to_rfc3339() })
+}
+
+#[tauri::command]
+fn run_monitor_now(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>, settings: AppSettings) -> Result<MonitorRunResult, String> {
+    *runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
+    execute_monitor(&app, &settings)
+}
+
+#[tauri::command]
+fn list_alert_events(app: tauri::AppHandle) -> Result<Vec<AlertEvent>, String> {
+    let conn = Connection::open(db_path(&app)?).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT event_json FROM alert_events ORDER BY created_at DESC LIMIT 100").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(Result::ok).filter_map(|raw| serde_json::from_str(&raw).ok()).collect())
+}
+
+fn start_monitor_scheduler(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        let mut elapsed_seconds = 0_u64;
+        loop {
+            thread::sleep(Duration::from_secs(30));
+            elapsed_seconds = elapsed_seconds.saturating_add(30);
+            let settings = match app.state::<RuntimeSettings>().0.lock() {
+                Ok(settings) => settings.clone(), Err(_) => continue,
+            };
+            if !settings.monitor_enabled { elapsed_seconds = 0; continue; }
+            let interval = settings.monitor_interval_minutes.max(1).saturating_mul(60);
+            if elapsed_seconds < interval { continue; }
+            elapsed_seconds = 0;
+            if let Err(error) = execute_monitor(&app, &settings) {
+                let _ = app.emit("monitor-error", error);
+            }
+        }
+    });
+}
+
 #[tauri::command]
 async fn install_mcp_grafana(app: tauri::AppHandle) -> Result<InstallResult, String> {
     let tools_dir = app
@@ -262,6 +356,9 @@ pub fn run() {
             let conn = Connection::open(db_path(app.handle())?)?;
             init_db(&conn)?;
             app.manage(Database(Mutex::new(conn)));
+            let settings = load_settings(app.handle().clone()).unwrap_or_default();
+            app.manage(RuntimeSettings(Mutex::new(settings)));
+            start_monitor_scheduler(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -272,6 +369,8 @@ pub fn run() {
             test_connection,
             list_mcp_tools,
             call_mcp_tool,
+            run_monitor_now,
+            list_alert_events,
             install_mcp_grafana
         ])
         .run(tauri::generate_context!())

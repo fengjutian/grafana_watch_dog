@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentReport, defaultSettings, reportHistory } from "../demo/reportFixtures";
-import type { AppSettings, McpInstallResult, McpTool, Report } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const pause = (ms = 450) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -44,4 +44,17 @@ export async function callMcpTool<T = unknown>(settings: AppSettings, name: stri
 export async function installMcpGrafana(): Promise<McpInstallResult> {
   if (!isTauri()) throw new Error("一键安装仅在 Tauri 桌面应用中可用");
   return invoke<McpInstallResult>("install_mcp_grafana");
+}
+
+export async function runMonitorNow(settings: AppSettings): Promise<MonitorRunResult> {
+  if (!isTauri()) {
+    await pause();
+    return { checked: settings.alertRules.length, events: [], errors: ["浏览器演示模式不会调用 MCP"], completedAt: new Date().toISOString() };
+  }
+  return invoke("run_monitor_now", { settings });
+}
+
+export async function listAlertEvents(): Promise<AlertEvent[]> {
+  if (!isTauri()) return [];
+  return invoke("list_alert_events");
 }
