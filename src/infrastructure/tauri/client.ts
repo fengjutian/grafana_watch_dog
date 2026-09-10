@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { currentReport, defaultSettings, reportHistory } from "./data";
-import type { AppSettings, Report } from "./types";
+import { currentReport, defaultSettings, reportHistory } from "../demo/reportFixtures";
+import type { AppSettings, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const pause = (ms = 450) => new Promise((resolve) => setTimeout(resolve, ms));

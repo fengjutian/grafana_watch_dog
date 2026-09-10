@@ -1,12 +1,12 @@
 [package]
-name = "ai-ops-daily"
+name = "grafana_watch_dog"
 version = "0.1.0"
-description = "Read-only AI operations daily report desktop app"
+description = "Read-only Grafana AI operations watch dog"
 authors = ["AI Ops Daily contributors"]
 edition = "2021"
 
 [lib]
-name = "ai_ops_daily_lib"
+name = "grafana_watch_dog_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

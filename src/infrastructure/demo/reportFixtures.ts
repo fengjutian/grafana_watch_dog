@@ -1,4 +1,4 @@
-import type { AppSettings, Report } from "./types";
+import type { AppSettings, Report } from "../../domain/report/types";
 
 const trends = [
   { label: "CPU", value: 52, unit: "%", change: 12, history: [38, 41, 45, 43, 48, 49, 52] },

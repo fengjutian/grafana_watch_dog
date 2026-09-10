@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { generateReport, listReports, loadSettings, saveSettings, testConnection } from "./api";
-import { defaultSettings } from "./data";
-import type { AppSettings, Issue, Report, Status } from "./types";
+import { Button, Tooltip } from "@mantine/core";
+import { IconActivityHeartbeat, IconAdjustments, IconBrain, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
+import { generateReport, listReports, loadSettings, saveSettings, testConnection } from "../infrastructure/tauri/client";
+import { defaultSettings } from "../infrastructure/demo/reportFixtures";
+import type { AppSettings, Issue, Report, Status } from "../domain/report/types";
 
 type Page = "dashboard" | "reports" | "analysis" | "mcp" | "settings";
 
-const icons: Record<string, string> = { dashboard: "⌁", reports: "▤", analysis: "✦", mcp: "⌘", settings: "⚙" };
+const icons = { dashboard: IconLayoutDashboard, reports: IconFileAnalytics, analysis: IconBrain, mcp: IconServerCog, settings: IconAdjustments };
 const nav: { id: Page; label: string }[] = [
   { id: "dashboard", label: "运行总览" }, { id: "reports", label: "日报历史" }, { id: "analysis", label: "AI 分析" },
   { id: "mcp", label: "MCP 服务" }, { id: "settings", label: "系统设置" },

@@ -30,19 +30,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-ops-daily"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "ico",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1192,6 +1179,19 @@ dependencies = [
  "glib-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "grafana_watch_dog"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ico",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
 ]
 
 [[package]]

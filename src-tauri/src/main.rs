@@ -1,3 +1,3 @@
 fn main() {
-    ai_ops_daily_lib::run();
+    grafana_watch_dog_lib::run();
 }

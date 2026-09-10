@@ -175,5 +175,5 @@ pub fn run() {
             test_connection
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run AI Ops Daily");
+        .expect("failed to run Grafana Watch Dog");
 }
