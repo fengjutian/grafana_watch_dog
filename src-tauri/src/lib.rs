@@ -487,7 +487,10 @@ fn execute_monitor(
             "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at) VALUES (?1,?2,?3,?4,?5)",
             params![rule.id, rule.name, value, rule.unit, now.to_rfc3339()],
         ).map_err(|e| e.to_string())?;
-        readings.push(MetricReading { rule: rule.clone(), value });
+        readings.push(MetricReading {
+            rule: rule.clone(),
+            value,
+        });
         let (state, event) = evaluate(
             rule,
             value,
@@ -522,10 +525,16 @@ fn execute_monitor(
     })
 }
 
-fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> Result<Value, String> {
+fn generate_and_store_report(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+) -> Result<Value, String> {
     let run = execute_monitor(app, settings)?;
     if run.readings.is_empty() {
-        return Err(format!("Grafana 未返回任何可用指标：{}", run.errors.join("；")));
+        return Err(format!(
+            "Grafana 未返回任何可用指标：{}",
+            run.errors.join("；")
+        ));
     }
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     let now = Local::now();
@@ -538,11 +547,24 @@ fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> 
     let mut issues = Vec::new();
 
     for reading in &run.readings {
-        let breached = reading.rule.operator.matches(reading.value, reading.rule.threshold);
-        if breached && reading.rule.severity == "critical" { critical += 1; }
-        else if breached { warning += 1; }
-        else { healthy += 1; }
-        let service_score = if !breached { 100 } else if reading.rule.severity == "critical" { 35 } else { 65 };
+        let breached = reading
+            .rule
+            .operator
+            .matches(reading.value, reading.rule.threshold);
+        if breached && reading.rule.severity == "critical" {
+            critical += 1;
+        } else if breached {
+            warning += 1;
+        } else {
+            healthy += 1;
+        }
+        let service_score = if !breached {
+            100
+        } else if reading.rule.severity == "critical" {
+            35
+        } else {
+            65
+        };
         services.push(json!({
             "name": reading.rule.name,
             "kind": "Prometheus",
@@ -551,10 +573,18 @@ fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> 
         }));
 
         let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 ORDER BY collected_at DESC LIMIT 7").map_err(|e| e.to_string())?;
-        let mut history: Vec<f64> = stmt.query_map([&reading.rule.id], |row| row.get(0)).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
+        let mut history: Vec<f64> = stmt
+            .query_map([&reading.rule.id], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
         history.reverse();
         let first = history.first().copied().unwrap_or(reading.value);
-        let change = if first.abs() < f64::EPSILON { 0.0 } else { ((reading.value - first) / first * 100.0).round() };
+        let change = if first.abs() < f64::EPSILON {
+            0.0
+        } else {
+            ((reading.value - first) / first * 100.0).round()
+        };
         trends.push(json!({ "label":reading.rule.name, "value":reading.value, "unit":reading.rule.unit, "change":change, "history":history }));
 
         if breached {
@@ -578,14 +608,38 @@ fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> 
         warning += 1;
     }
     let score = (100 - critical * 25 - warning * 10).clamp(0, 100);
-    let status = if critical > 0 { "critical" } else if warning > 0 { "warning" } else { "healthy" };
-    let active_alerts: i64 = conn.query_row("SELECT COUNT(*) FROM alert_states WHERE json_extract(state_json,'$.active')=1", [], |row| row.get(0)).unwrap_or(0);
-    let summary = if critical > 0 {
-        format!("本次从 Grafana 采集 {} 项真实指标，发现 {} 项严重异常、{} 项警告。", run.readings.len(), critical, warning)
+    let status = if critical > 0 {
+        "critical"
     } else if warning > 0 {
-        format!("本次从 Grafana 采集 {} 项真实指标，发现 {} 项需要关注的问题。", run.readings.len(), warning)
+        "warning"
     } else {
-        format!("本次从 Grafana 采集的 {} 项真实指标均在配置阈值内。", run.readings.len())
+        "healthy"
+    };
+    let active_alerts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM alert_states WHERE json_extract(state_json,'$.active')=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let summary = if critical > 0 {
+        format!(
+            "本次从 Grafana 采集 {} 项真实指标，发现 {} 项严重异常、{} 项警告。",
+            run.readings.len(),
+            critical,
+            warning
+        )
+    } else if warning > 0 {
+        format!(
+            "本次从 Grafana 采集 {} 项真实指标，发现 {} 项需要关注的问题。",
+            run.readings.len(),
+            warning
+        )
+    } else {
+        format!(
+            "本次从 Grafana 采集的 {} 项真实指标均在配置阈值内。",
+            run.readings.len()
+        )
     };
     let report = json!({
         "id":format!("report-{date}"), "date":date, "score":score, "status":status,
@@ -602,8 +656,15 @@ fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> 
 }
 
 #[tauri::command]
-fn generate_report(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>) -> Result<Value, String> {
-    let settings = runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())?.clone();
+fn generate_report(
+    app: tauri::AppHandle,
+    runtime: State<'_, RuntimeSettings>,
+) -> Result<Value, String> {
+    let settings = runtime
+        .0
+        .lock()
+        .map_err(|_| "运行时设置锁异常".to_string())?
+        .clone();
     generate_and_store_report(&app, &settings)
 }
 
@@ -680,6 +741,24 @@ fn analyze_alerts(
     Err(last_error)
 }
 
+fn report_exists_for_date(app: &tauri::AppHandle, date: &str) -> bool {
+    let path = match db_path(app) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    Connection::open(path)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM reports WHERE report_date=?1)",
+                [date],
+                |row| row.get::<_, bool>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(false)
+}
+
 fn start_monitor_scheduler(app: tauri::AppHandle) {
     thread::spawn(move || {
         let mut elapsed_seconds = 0_u64;
@@ -707,7 +786,10 @@ fn start_monitor_scheduler(app: tauri::AppHandle) {
                 let now = Local::now();
                 let today = now.format("%Y-%m-%d").to_string();
                 let current_time = now.format("%H:%M").to_string();
-                if current_time >= settings.schedule_time && last_report_attempt_date.as_deref() != Some(today.as_str()) {
+                if current_time >= settings.schedule_time
+                    && last_report_attempt_date.as_deref() != Some(today.as_str())
+                    && !report_exists_for_date(&app, &today)
+                {
                     last_report_attempt_date = Some(today);
                     if let Err(error) = generate_and_store_report(&app, &settings) {
                         let _ = app.emit("report-error", error);

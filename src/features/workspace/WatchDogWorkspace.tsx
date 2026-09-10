@@ -22,7 +22,7 @@ const aiProviders: Record<string, { baseUrl: string; model: string }> = {
 };
 
 function WatchDogMark({ size = 38 }: { size?: number }) {
-  return <img className="watchdog-mark" src="/watchdog-ai-v2.png" width={size} height={size} alt="" />;
+  return <img className="watchdog-mark" src="/chinese-rural-dog.png" width={size} height={size} alt="" />;
 }
 
 function errorMessage(error: unknown, fallback: string) {
