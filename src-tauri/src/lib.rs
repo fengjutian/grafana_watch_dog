@@ -2,15 +2,18 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::Mutex};
-use tauri::{Manager, State};
+use std::{fs, path::PathBuf, sync::Mutex, thread, time::Duration};
+use tauri::{Emitter, Manager, State};
 
 mod mcp;
+mod monitor;
 use mcp::{
     install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
 };
+use monitor::{evaluate, extract_metric_values, AlertEvent, AlertRule, AlertState, Comparison};
 
 struct Database(Mutex<Connection>);
+struct RuntimeSettings(Mutex<AppSettings>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +30,27 @@ struct AppSettings {
     ai_key: String,
     schedule_enabled: bool,
     schedule_time: String,
+    #[serde(default)]
+    monitor_enabled: bool,
+    #[serde(default = "default_monitor_interval")]
+    monitor_interval_minutes: u64,
+    #[serde(default)]
+    prometheus_datasource_uid: String,
+    #[serde(default = "default_cooldown")]
+    alert_cooldown_minutes: i64,
+    #[serde(default = "default_alert_rules")]
+    alert_rules: Vec<AlertRule>,
+}
+
+fn default_monitor_interval() -> u64 { 5 }
+fn default_cooldown() -> i64 { 30 }
+fn default_alert_rules() -> Vec<AlertRule> {
+    vec![
+        AlertRule { id:"cpu".into(), name:"CPU 使用率".into(), expr:"100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)".into(), operator:Comparison::GreaterThan, threshold:85.0, for_checks:2, severity:"critical".into(), unit:"%".into() },
+        AlertRule { id:"memory".into(), name:"内存使用率".into(), expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100".into(), operator:Comparison::GreaterThan, threshold:90.0, for_checks:1, severity:"critical".into(), unit:"%".into() },
+        AlertRule { id:"disk".into(), name:"磁盘剩余空间".into(), expr:"node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes * 100".into(), operator:Comparison::LessThan, threshold:10.0, for_checks:1, severity:"critical".into(), unit:"%".into() },
+        AlertRule { id:"server_up".into(), name:"服务器在线状态".into(), expr:"up{job=~\"node.*\"}".into(), operator:Comparison::LessThan, threshold:1.0, for_checks:1, severity:"critical".into(), unit:"".into() },
+    ]
 }
 
 impl Default for AppSettings {
@@ -42,6 +66,11 @@ impl Default for AppSettings {
             ai_key: String::new(),
             schedule_enabled: true,
             schedule_time: "08:00".into(),
+            monitor_enabled: false,
+            monitor_interval_minutes: default_monitor_interval(),
+            prometheus_datasource_uid: String::new(),
+            alert_cooldown_minutes: default_cooldown(),
+            alert_rules: default_alert_rules(),
         }
     }
 }
@@ -65,7 +94,16 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
           status TEXT NOT NULL, summary TEXT NOT NULL, report_json TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(report_date DESC);",
+        CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(report_date DESC);
+        CREATE TABLE IF NOT EXISTS alert_states (
+          rule_id TEXT PRIMARY KEY, state_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS alert_events (
+          id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, kind TEXT NOT NULL,
+          severity TEXT NOT NULL, message TEXT NOT NULL, event_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_events_created ON alert_events(created_at DESC);",
     )
 }
 
