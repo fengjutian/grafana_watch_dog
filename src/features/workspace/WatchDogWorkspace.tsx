@@ -22,7 +22,7 @@ const aiProviders: Record<string, { baseUrl: string; model: string }> = {
 };
 
 function WatchDogMark({ size = 38 }: { size?: number }) {
-  return <img className="watchdog-mark" src="/watchdog-mark.svg" width={size} height={size} alt="" />;
+  return <img className="watchdog-mark" src="/watchdog-ai-v2.png" width={size} height={size} alt="" />;
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -36,9 +36,10 @@ function statusLabel(status: Status) { return ({ critical: "严重", high: "高�
 function scoreTone(score: number) { return score >= 90 ? "green" : score >= 75 ? "amber" : score >= 60 ? "orange" : "red"; }
 
 function Sparkline({ data }: { data: number[] }) {
-  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
-  const points = data.map((v, i) => `${(i / (data.length - 1)) * 120},${38 - ((v - min) / range) * 30}`).join(" ");
-  return <svg className="spark" viewBox="0 0 120 44" aria-label="过去 7 天趋势"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" /><circle cx="120" cy={38 - ((data.at(-1)! - min) / range) * 30} r="3.5" fill="currentColor" /></svg>;
+  const values = data.length === 1 ? [data[0], data[0]] : data;
+  const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
+  const points = values.map((v, i) => `${(i / (values.length - 1)) * 120},${38 - ((v - min) / range) * 30}`).join(" ");
+  return <svg className="spark" viewBox="0 0 120 44" aria-label="最近采集趋势"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" /><circle cx="120" cy={38 - ((values.at(-1)! - min) / range) * 30} r="3.5" fill="currentColor" /></svg>;
 }
 
 function HealthGauge({ score, compact = false }: { score: number; compact?: boolean }) {
@@ -64,7 +65,7 @@ function Dashboard({ report, onGenerate, generating }: { report: Report; onGener
       <div className="card conclusion"><div className="conclusion-top"><span className="ai-mark"><IconSparkles size={20} /></span><div><span className="section-kicker">AI CONCLUSION</span><h2>今日结论</h2></div></div><blockquote>{report.summary}</blockquote><div className="stat-row"><div><b className="red-text">{report.stats.critical}</b><span>严重问题</span></div><div><b className="amber-text">{report.stats.warning}</b><span>需要关注</span></div><div><b className="green-text">{report.stats.healthy}</b><span>正常指标</span></div><div><b>{report.stats.alerts}</b><span>昨日告警</span></div></div></div>
     </section>
     <section><div className="section-title"><div><p className="eyebrow">SERVICE PULSE</p><h2>服务状态</h2></div><span>数据更新于 {report.generatedAt.split(" ").at(-1)}</span></div><div className="service-grid">{report.services.map((s) => <div className="card service-card" key={s.name}><div className="service-top"><div className={`service-icon ${scoreTone(s.score)}`}>{s.kind.slice(0, 1)}</div><div><h3>{s.name}</h3><small>{s.kind}</small></div><b className={scoreTone(s.score)}>{s.score}</b></div><div className="meter"><i style={{ width: `${s.score}%` }} className={scoreTone(s.score)} /></div><div className="metric-chips">{s.metrics.map((m) => <span key={m}>{m}</span>)}</div></div>)}</div></section>
-    <section><div className="section-title"><div><p className="eyebrow">7-DAY SIGNAL</p><h2>关键趋势</h2></div><span>对比过去 7 天均值</span></div><div className="trend-grid">{report.trends.map((t) => <div className="card trend-card" key={t.label}><div><span>{t.label}</span><strong>{t.value.toLocaleString()}{t.unit}</strong><small className={t.change > 20 ? "red-text" : "amber-text"}>↑ {t.change}%</small></div><Sparkline data={t.history} /></div>)}</div></section>
+    <section><div className="section-title"><div><p className="eyebrow">RECENT SIGNAL</p><h2>关键趋势</h2></div><span>最近 7 次真实采集</span></div><div className="trend-grid">{report.trends.map((t) => <div className="card trend-card" key={t.label}><div><span>{t.label}</span><strong>{t.value.toLocaleString()}{t.unit}</strong><small className={Math.abs(t.change) > 20 ? "red-text" : "amber-text"}>{t.change >= 0 ? "↑" : "↓"} {Math.abs(t.change)}%</small></div><Sparkline data={t.history} /></div>)}</div></section>
     <section><div className="section-title"><div><p className="eyebrow">PRIORITY QUEUE</p><h2>优先处理</h2></div><span>{report.issues.length} 项分析结果</span></div><div className="issues">{report.issues.map((i) => <IssueCard issue={i} key={i.id} />)}</div></section>
   </>;
 }

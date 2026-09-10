@@ -522,6 +522,91 @@ fn execute_monitor(
     })
 }
 
+fn generate_and_store_report(app: &tauri::AppHandle, settings: &AppSettings) -> Result<Value, String> {
+    let run = execute_monitor(app, settings)?;
+    if run.readings.is_empty() {
+        return Err(format!("Grafana 未返回任何可用指标：{}", run.errors.join("；")));
+    }
+    let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
+    let now = Local::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    let mut critical = 0_i64;
+    let mut warning = 0_i64;
+    let mut healthy = 0_i64;
+    let mut services = Vec::new();
+    let mut trends = Vec::new();
+    let mut issues = Vec::new();
+
+    for reading in &run.readings {
+        let breached = reading.rule.operator.matches(reading.value, reading.rule.threshold);
+        if breached && reading.rule.severity == "critical" { critical += 1; }
+        else if breached { warning += 1; }
+        else { healthy += 1; }
+        let service_score = if !breached { 100 } else if reading.rule.severity == "critical" { 35 } else { 65 };
+        services.push(json!({
+            "name": reading.rule.name,
+            "kind": "Prometheus",
+            "score": service_score,
+            "metrics": [format!("{:.2}{}", reading.value, reading.rule.unit), format!("阈值 {:.2}{}", reading.rule.threshold, reading.rule.unit)]
+        }));
+
+        let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 ORDER BY collected_at DESC LIMIT 7").map_err(|e| e.to_string())?;
+        let mut history: Vec<f64> = stmt.query_map([&reading.rule.id], |row| row.get(0)).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
+        history.reverse();
+        let first = history.first().copied().unwrap_or(reading.value);
+        let change = if first.abs() < f64::EPSILON { 0.0 } else { ((reading.value - first) / first * 100.0).round() };
+        trends.push(json!({ "label":reading.rule.name, "value":reading.value, "unit":reading.rule.unit, "change":change, "history":history }));
+
+        if breached {
+            issues.push(json!({
+                "id": reading.rule.id,
+                "severity": reading.rule.severity,
+                "title": format!("{}超过告警阈值", reading.rule.name),
+                "source": "Grafana MCP · Prometheus",
+                "change": format!("{:.2}{}", reading.value, reading.rule.unit),
+                "reason": format!("实际值 {:.2}{}，配置阈值 {:.2}{}。", reading.value, reading.rule.unit, reading.rule.threshold, reading.rule.unit),
+                "recommendations": ["核对对应实例和标签", "检查同一时间窗口的日志与发布记录", "确认指标是否持续异常"]
+            }));
+        }
+    }
+    for (index, error) in run.errors.iter().enumerate() {
+        issues.push(json!({
+            "id": format!("collection-error-{index}"), "severity":"warning",
+            "title":"指标采集失败", "source":"Grafana MCP", "change":"采集错误",
+            "reason":error, "recommendations":["运行连接诊断", "检查数据源 UID 与 PromQL", "确认 Service Account 查询权限"]
+        }));
+        warning += 1;
+    }
+    let score = (100 - critical * 25 - warning * 10).clamp(0, 100);
+    let status = if critical > 0 { "critical" } else if warning > 0 { "warning" } else { "healthy" };
+    let active_alerts: i64 = conn.query_row("SELECT COUNT(*) FROM alert_states WHERE json_extract(state_json,'$.active')=1", [], |row| row.get(0)).unwrap_or(0);
+    let summary = if critical > 0 {
+        format!("本次从 Grafana 采集 {} 项真实指标，发现 {} 项严重异常、{} 项警告。", run.readings.len(), critical, warning)
+    } else if warning > 0 {
+        format!("本次从 Grafana 采集 {} 项真实指标，发现 {} 项需要关注的问题。", run.readings.len(), warning)
+    } else {
+        format!("本次从 Grafana 采集的 {} 项真实指标均在配置阈值内。", run.readings.len())
+    };
+    let report = json!({
+        "id":format!("report-{date}"), "date":date, "score":score, "status":status,
+        "summary":summary, "generatedAt":now.format("%Y-%m-%d %H:%M:%S").to_string(),
+        "stats":{"critical":critical,"warning":warning,"healthy":healthy,"alerts":active_alerts},
+        "services":services, "trends":trends, "issues":issues
+    });
+    conn.execute(
+        "INSERT OR REPLACE INTO reports(id,report_date,score,status,summary,report_json,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![report["id"].as_str(), report["date"].as_str(), score, status, report["summary"].as_str(), report.to_string(), report["generatedAt"].as_str()]
+    ).map_err(|e| e.to_string())?;
+    let _ = app.emit("report-generated", &report);
+    Ok(report)
+}
+
+#[tauri::command]
+fn generate_report(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>) -> Result<Value, String> {
+    let settings = runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())?.clone();
+    generate_and_store_report(&app, &settings)
+}
+
 #[tauri::command]
 fn run_monitor_now(
     app: tauri::AppHandle,
@@ -598,6 +683,7 @@ fn analyze_alerts(
 fn start_monitor_scheduler(app: tauri::AppHandle) {
     thread::spawn(move || {
         let mut elapsed_seconds = 0_u64;
+        let mut last_report_attempt_date: Option<String> = None;
         loop {
             thread::sleep(Duration::from_secs(30));
             elapsed_seconds = elapsed_seconds.saturating_add(30);
@@ -605,17 +691,28 @@ fn start_monitor_scheduler(app: tauri::AppHandle) {
                 Ok(settings) => settings.clone(),
                 Err(_) => continue,
             };
-            if !settings.monitor_enabled {
+            if settings.monitor_enabled {
+                let interval = settings.monitor_interval_minutes.max(1).saturating_mul(60);
+                if elapsed_seconds >= interval {
+                    elapsed_seconds = 0;
+                    if let Err(error) = execute_monitor(&app, &settings) {
+                        let _ = app.emit("monitor-error", error);
+                    }
+                }
+            } else {
                 elapsed_seconds = 0;
-                continue;
             }
-            let interval = settings.monitor_interval_minutes.max(1).saturating_mul(60);
-            if elapsed_seconds < interval {
-                continue;
-            }
-            elapsed_seconds = 0;
-            if let Err(error) = execute_monitor(&app, &settings) {
-                let _ = app.emit("monitor-error", error);
+
+            if settings.schedule_enabled {
+                let now = Local::now();
+                let today = now.format("%Y-%m-%d").to_string();
+                let current_time = now.format("%H:%M").to_string();
+                if current_time >= settings.schedule_time && last_report_attempt_date.as_deref() != Some(today.as_str()) {
+                    last_report_attempt_date = Some(today);
+                    if let Err(error) = generate_and_store_report(&app, &settings) {
+                        let _ = app.emit("report-error", error);
+                    }
+                }
             }
         }
     });
