@@ -6,7 +6,9 @@ use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{Manager, State};
 
 mod mcp;
-use mcp::{install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary};
+use mcp::{
+    install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
+};
 
 struct Database(Mutex<Connection>);
 
@@ -206,7 +208,11 @@ fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Resul
 
 #[tauri::command]
 async fn install_mcp_grafana(app: tauri::AppHandle) -> Result<InstallResult, String> {
-    let tools_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("tools");
+    let tools_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools");
     tauri::async_runtime::spawn_blocking(move || install_official_server(&tools_dir))
         .await
         .map_err(|e| format!("安装任务异常：{e}"))?

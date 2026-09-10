@@ -12,6 +12,7 @@
 - Grafana MCP、AI Provider、定时计划配置界面
 - Rust/Tauri 命令层和 SQLite 日报存储
 - 官方 `mcp-grafana` 进程托管、MCP initialize 握手、工具发现与工具调用基础能力
+- MCP 页面一键安装：优先复用已有程序，其次使用官方推荐的 `uvx`，最后通过 Go 安装到应用私有工具目录
 - Mantine UI、Tabler Icons、TanStack Query 应用基础设施
 - `--disable-write` 强制安全检查
 - 无 Grafana、无模型凭据时的离线演示模式
@@ -65,6 +66,8 @@ mcp-grafana --transport stdio --disable-write \
 ```
 
 Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 和 `GRAFANA_SERVICE_ACCOUNT_TOKEN` 注入，不拼接进命令行。点击“测试连接”会实际执行 MCP `initialize` 和 `tools/list`。
+
+也可以直接点击 MCP 页面中的“安装 mcp-grafana”。应用不会申请管理员权限：如果系统有 `uvx`，会使用官方推荐的零配置方式准备服务；如果系统有 Go，则把官方二进制安装到应用数据目录并自动回填命令。安装完成后，有完整 Grafana 凭据时会自动连接，否则提示补充 Token。
 
 ## 安全边界
 

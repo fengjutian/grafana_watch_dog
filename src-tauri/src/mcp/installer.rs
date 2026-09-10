@@ -24,7 +24,9 @@ fn command_works(program: &str, args: &[&str]) -> bool {
 pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String> {
     if command_works("mcp-grafana", &["--help"]) {
         return Ok(InstallResult {
-            command: "mcp-grafana".into(), args_prefix: vec![], method: "existing".into(),
+            command: "mcp-grafana".into(),
+            args_prefix: vec![],
+            method: "existing".into(),
             message: "mcp-grafana 已安装，无需重复安装".into(),
         });
     }
@@ -32,7 +34,9 @@ pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String
     // uvx is the official least-setup path. Its first run downloads and caches the package.
     if command_works("uvx", &["mcp-grafana", "--help"]) {
         return Ok(InstallResult {
-            command: "uvx".into(), args_prefix: vec!["mcp-grafana".into()], method: "uvx".into(),
+            command: "uvx".into(),
+            args_prefix: vec!["mcp-grafana".into()],
+            method: "uvx".into(),
             message: "已通过官方 uvx 方式准备 mcp-grafana".into(),
         });
     }
@@ -51,10 +55,18 @@ pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("安装 mcp-grafana 失败：{}", stderr.trim()));
     }
-    let binary = tools_dir.join(if cfg!(windows) { "mcp-grafana.exe" } else { "mcp-grafana" });
-    if !binary.exists() { return Err("go install 已完成，但没有找到 mcp-grafana 二进制文件".into()); }
+    let binary = tools_dir.join(if cfg!(windows) {
+        "mcp-grafana.exe"
+    } else {
+        "mcp-grafana"
+    });
+    if !binary.exists() {
+        return Err("go install 已完成，但没有找到 mcp-grafana 二进制文件".into());
+    }
     Ok(InstallResult {
-        command: binary.to_string_lossy().into_owned(), args_prefix: vec![], method: "go".into(),
+        command: binary.to_string_lossy().into_owned(),
+        args_prefix: vec![],
+        method: "go".into(),
         message: "已将官方 mcp-grafana 安装到应用工具目录".into(),
     })
 }

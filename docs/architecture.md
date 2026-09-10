@@ -33,4 +33,6 @@ src-tauri/lib (composition root)
 4. 使用 `tools/list` 进行连接测试和能力发现。
 5. 使用 `tools/call` 执行只读查询；client drop 时终止并回收子进程。
 
+安装器只在用户点击按钮后运行。优先检测已有命令，再尝试 `uvx mcp-grafana`；存在 Go 工具链时，使用官方模块地址并设置应用私有 `GOBIN`，避免修改系统目录和 PATH。
+
 默认参数固定包含 `--disable-write`。即便如此，生产环境仍应给 Service Account 配置最小 RBAC 权限。
