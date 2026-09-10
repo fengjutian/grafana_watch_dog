@@ -15,3 +15,5 @@ export interface AppSettings {
   aiProvider: string; aiBaseUrl: string; aiModel: string; aiKey: string;
   scheduleEnabled: boolean; scheduleTime: string;
 }
+
+export interface McpTool { name: string; description: string }

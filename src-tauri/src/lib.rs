@@ -5,6 +5,9 @@ use serde_json::{json, Value};
 use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{Manager, State};
 
+mod mcp;
+use mcp::{GrafanaMcpClient, GrafanaMcpConfig, ToolSummary};
+
 struct Database(Mutex<Connection>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +33,7 @@ impl Default for AppSettings {
             grafana_url: "http://localhost:3000".into(),
             grafana_token: String::new(),
             mcp_command: "mcp-grafana".into(),
-            mcp_args: "--disable-write".into(),
+            mcp_args: "--transport stdio --disable-write --enabled-tools search,datasource,prometheus,loki,alerting,dashboard".into(),
             ai_provider: "DeepSeek".into(),
             ai_base_url: "https://api.deepseek.com".into(),
             ai_model: "deepseek-chat".into(),
@@ -44,7 +47,7 @@ impl Default for AppSettings {
 fn db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("ai-ops-daily.db"))
+    Ok(dir.join("grafana_watch_dog.db"))
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -156,7 +159,26 @@ fn test_connection(settings: AppSettings) -> Result<String, String> {
     {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
-    Ok("配置检查通过；安装 mcp-grafana 后即可建立只读连接".into())
+    let mut client = GrafanaMcpClient::connect(mcp_config(&settings))?;
+    let tools = client.list_tools()?;
+    Ok(format!("已连接官方 mcp-grafana，共发现 {} 个只读工具", tools.len()))
+}
+
+fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
+    GrafanaMcpConfig {
+        command: settings.mcp_command.clone(),
+        args: settings.mcp_args.split_whitespace().map(str::to_owned).collect(),
+        grafana_url: settings.grafana_url.clone(),
+        service_account_token: settings.grafana_token.clone(),
+    }
+}
+
+#[tauri::command]
+fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
+    if !settings.mcp_args.split_whitespace().any(|arg| arg == "--disable-write") {
+        return Err("安全检查失败：MVP 必须使用 --disable-write".into());
+    }
+    GrafanaMcpClient::connect(mcp_config(&settings))?.list_tools()
 }
 
 pub fn run() {
@@ -173,6 +195,7 @@ pub fn run() {
             load_settings,
             save_settings,
             test_connection
+            ,list_mcp_tools
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grafana Watch Dog");

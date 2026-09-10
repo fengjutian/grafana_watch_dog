@@ -33,7 +33,7 @@ export const reportHistory: Report[] = [
 ];
 
 export const defaultSettings: AppSettings = {
-  grafanaUrl: "http://localhost:3000", grafanaToken: "", mcpCommand: "mcp-grafana", mcpArgs: "--disable-write",
+  grafanaUrl: "http://localhost:3000", grafanaToken: "", mcpCommand: "mcp-grafana", mcpArgs: "--transport stdio --disable-write --enabled-tools search,datasource,prometheus,loki,alerting,dashboard",
   aiProvider: "DeepSeek", aiBaseUrl: "https://api.deepseek.com", aiModel: "deepseek-chat", aiKey: "",
   scheduleEnabled: true, scheduleTime: "08:00",
 };

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentReport, defaultSettings, reportHistory } from "../demo/reportFixtures";
-import type { AppSettings, Report } from "../../domain/report/types";
+import type { AppSettings, McpTool, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const pause = (ms = 450) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,4 +25,13 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
 export async function testConnection(settings: AppSettings): Promise<string> {
   if (isTauri()) return invoke("test_mcp_connection", { settings });
   await pause(); return settings.grafanaUrl ? "Grafana MCP 连接成功（演示模式）" : Promise.reject(new Error("请填写 Grafana 地址"));
+}
+
+export async function listMcpTools(settings: AppSettings): Promise<McpTool[]> {
+  if (isTauri()) return invoke("list_mcp_tools", { settings });
+  return [
+    { name: "query_prometheus", description: "执行只读 PromQL 查询" },
+    { name: "query_loki_logs", description: "执行只读 LogQL 查询" },
+    { name: "list_alert_rules", description: "读取 Grafana 告警规则" },
+  ];
 }
