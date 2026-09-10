@@ -13,7 +13,8 @@ export const defaultSettings: AppSettings = {
   scheduleTime: "08:00",
   monitorEnabled: false,
   monitorIntervalMinutes: 5,
-  prometheusDatasourceUid: "",
+  selectedDatasourceUids: [],
+  selectedDashboardUids: [],
   alertCooldownMinutes: 30,
   mcpRetryAttempts: 3,
   alertRules: [

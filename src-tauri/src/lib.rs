@@ -43,7 +43,9 @@ struct AppSettings {
     #[serde(default = "default_monitor_interval")]
     monitor_interval_minutes: u64,
     #[serde(default)]
-    prometheus_datasource_uid: String,
+    selected_datasource_uids: Vec<String>,
+    #[serde(default)]
+    selected_dashboard_uids: Vec<String>,
     #[serde(default = "default_cooldown")]
     alert_cooldown_minutes: i64,
     #[serde(default = "default_alert_rules")]
@@ -85,7 +87,8 @@ impl Default for AppSettings {
             schedule_time: "08:00".into(),
             monitor_enabled: false,
             monitor_interval_minutes: default_monitor_interval(),
-            prometheus_datasource_uid: String::new(),
+            selected_datasource_uids: Vec::new(),
+            selected_dashboard_uids: Vec::new(),
             alert_cooldown_minutes: default_cooldown(),
             alert_rules: default_alert_rules(),
             mcp_retry_attempts: default_retry_attempts(),

@@ -14,7 +14,8 @@ export interface AppSettings {
   grafanaUrl: string; grafanaToken: string; mcpCommand: string; mcpArgs: string;
   aiProvider: string; aiBaseUrl: string; aiModel: string; aiKey: string;
   scheduleEnabled: boolean; scheduleTime: string;
-  monitorEnabled: boolean; monitorIntervalMinutes: number; prometheusDatasourceUid: string;
+  monitorEnabled: boolean; monitorIntervalMinutes: number;
+  selectedDatasourceUids: string[]; selectedDashboardUids: string[];
   alertCooldownMinutes: number; alertRules: AlertRule[];
   mcpRetryAttempts: number;
 }
@@ -25,6 +26,9 @@ export interface AlertEvent { id: string; ruleId: string; ruleName: string; seve
 export interface MonitorRunResult { checked: number; events: AlertEvent[]; errors: string[]; completedAt: string }
 export interface DiagnosticStep { name: string; success: boolean; detail: string; durationMs: number }
 export interface ConnectionDiagnostic { success: boolean; attempts: number; steps: DiagnosticStep[] }
+export interface GrafanaDatasource { uid: string; name: string; kind: string }
+export interface GrafanaDashboard { uid: string; title: string }
+export interface GrafanaDiscovery { datasources: GrafanaDatasource[]; dashboards: GrafanaDashboard[] }
 
 export interface McpTool { name: string; description: string }
 export interface McpInstallResult { command: string; argsPrefix: string[]; method: "existing" | "uvx" | "go"; message: string }
