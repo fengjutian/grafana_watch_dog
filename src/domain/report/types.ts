@@ -17,3 +17,4 @@ export interface AppSettings {
 }
 
 export interface McpTool { name: string; description: string }
+export interface McpInstallResult { command: string; argsPrefix: string[]; method: "existing" | "uvx" | "go"; message: string }

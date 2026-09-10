@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentReport, defaultSettings, reportHistory } from "../demo/reportFixtures";
-import type { AppSettings, McpTool, Report } from "../../domain/report/types";
+import type { AppSettings, McpInstallResult, McpTool, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const pause = (ms = 450) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,4 +39,9 @@ export async function listMcpTools(settings: AppSettings): Promise<McpTool[]> {
 export async function callMcpTool<T = unknown>(settings: AppSettings, name: string, args: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new Error("MCP tool calls require the Tauri desktop runtime");
   return invoke<T>("call_mcp_tool", { settings, name, arguments: args });
+}
+
+export async function installMcpGrafana(): Promise<McpInstallResult> {
+  if (!isTauri()) throw new Error("一键安装仅在 Tauri 桌面应用中可用");
+  return invoke<McpInstallResult>("install_mcp_grafana");
 }
