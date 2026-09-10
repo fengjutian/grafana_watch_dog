@@ -270,6 +270,132 @@ struct ConnectionDiagnostic {
     steps: Vec<DiagnosticStep>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GrafanaDatasource {
+    uid: String,
+    name: String,
+    kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GrafanaDashboard {
+    uid: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GrafanaDiscovery {
+    datasources: Vec<GrafanaDatasource>,
+    dashboards: Vec<GrafanaDashboard>,
+}
+
+fn mcp_payload(result: &Value) -> Value {
+    result
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find_map(|item| item.get("text").and_then(Value::as_str))
+        })
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| result.clone())
+}
+
+fn collect_datasources(value: &Value, output: &mut Vec<GrafanaDatasource>) {
+    match value {
+        Value::Object(map) => {
+            if let (Some(uid), Some(name)) = (
+                map.get("uid").and_then(Value::as_str),
+                map.get("name").and_then(Value::as_str),
+            ) {
+                let kind = map
+                    .get("type")
+                    .or_else(|| map.get("kind"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                if !output.iter().any(|item| item.uid == uid) {
+                    output.push(GrafanaDatasource {
+                        uid: uid.into(),
+                        name: name.into(),
+                        kind: kind.into(),
+                    });
+                }
+            }
+            for child in map.values() {
+                collect_datasources(child, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_datasources(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_dashboards(value: &Value, output: &mut Vec<GrafanaDashboard>) {
+    match value {
+        Value::Object(map) => {
+            let is_dashboard = map
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|kind| kind == "dash-db" || kind == "dashboard")
+                .unwrap_or(true);
+            if is_dashboard {
+                if let (Some(uid), Some(title)) = (
+                    map.get("uid").and_then(Value::as_str),
+                    map.get("title").and_then(Value::as_str),
+                ) {
+                    if !output.iter().any(|item| item.uid == uid) {
+                        output.push(GrafanaDashboard {
+                            uid: uid.into(),
+                            title: title.into(),
+                        });
+                    }
+                }
+            }
+            for child in map.values() {
+                collect_dashboards(child, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_dashboards(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn discover_grafana(settings: AppSettings) -> Result<GrafanaDiscovery, String> {
+    let settings = hydrate_credentials(settings);
+    let mut client = connect_with_retry(&settings)?;
+    let datasource_result = call_tool_with_retry(
+        &mut client,
+        &settings,
+        "list_datasources",
+        json!({"limit":100,"offset":0}),
+    )?;
+    let dashboard_result = call_tool_with_retry(
+        &mut client,
+        &settings,
+        "search_dashboards",
+        json!({"limit":100,"page":1}),
+    )?;
+    let mut datasources = Vec::new();
+    let mut dashboards = Vec::new();
+    collect_datasources(&mcp_payload(&datasource_result), &mut datasources);
+    collect_dashboards(&mcp_payload(&dashboard_result), &mut dashboards);
+    Ok(GrafanaDiscovery {
+        datasources,
+        dashboards,
+    })
+}
+
 #[tauri::command]
 fn diagnose_connection(settings: AppSettings) -> ConnectionDiagnostic {
     let settings = hydrate_credentials(settings);
