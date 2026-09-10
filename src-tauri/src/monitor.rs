@@ -36,7 +36,7 @@ pub enum Comparison {
 }
 
 impl Comparison {
-    fn matches(self, value: f64, threshold: f64) -> bool {
+    pub fn matches(self, value: f64, threshold: f64) -> bool {
         match self {
             Self::GreaterThan => value > threshold,
             Self::GreaterOrEqual => value >= threshold,

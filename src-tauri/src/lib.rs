@@ -131,7 +131,13 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
           severity TEXT NOT NULL, message TEXT NOT NULL, event_json TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_alert_events_created ON alert_events(created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_alert_events_created ON alert_events(created_at DESC);
+        CREATE TABLE IF NOT EXISTS metric_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id TEXT NOT NULL,
+          rule_name TEXT NOT NULL, value REAL NOT NULL, unit TEXT NOT NULL,
+          collected_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_metric_samples_rule_time ON metric_samples(rule_id, collected_at DESC);",
     )
 }
 
@@ -148,11 +154,6 @@ fn list_reports(db: State<'_, Database>) -> Result<Vec<Value>, String> {
         .filter_map(Result::ok)
         .filter_map(|s| serde_json::from_str(&s).ok())
         .collect())
-}
-
-#[tauri::command]
-fn generate_report() -> Result<Value, String> {
-    Err("真实日报采集器尚未接入；未生成任何占位数据".into())
 }
 
 #[tauri::command]
@@ -417,6 +418,14 @@ struct MonitorRunResult {
     events: Vec<AlertEvent>,
     errors: Vec<String>,
     completed_at: String,
+    #[serde(skip_serializing)]
+    readings: Vec<MetricReading>,
+}
+
+#[derive(Debug, Clone)]
+struct MetricReading {
+    rule: AlertRule,
+    value: f64,
 }
 
 fn execute_monitor(
@@ -438,6 +447,7 @@ fn execute_monitor(
     let now = Local::now();
     let mut events = Vec::new();
     let mut errors = Vec::new();
+    let mut readings = Vec::new();
 
     for rule in &settings.alert_rules {
         let response = call_tool_with_retry(
@@ -473,6 +483,11 @@ fn execute_monitor(
             )
             .ok()
             .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
+        conn.execute(
+            "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at) VALUES (?1,?2,?3,?4,?5)",
+            params![rule.id, rule.name, value, rule.unit, now.to_rfc3339()],
+        ).map_err(|e| e.to_string())?;
+        readings.push(MetricReading { rule: rule.clone(), value });
         let (state, event) = evaluate(
             rule,
             value,
@@ -503,6 +518,7 @@ fn execute_monitor(
         events,
         errors,
         completed_at: now.to_rfc3339(),
+        readings,
     })
 }
 
