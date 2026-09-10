@@ -1,0 +1,1 @@
+{"root":["./src/app/app.tsx","./src/app/main.tsx","./src/domain/report/types.ts","./src/domain/settings/defaults.ts","./src/features/workspace/watchdogworkspace.tsx","./src/infrastructure/tauri/client.ts"],"version":"5.8.3"}

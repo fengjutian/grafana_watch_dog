@@ -382,13 +382,13 @@ fn discover_resources(
     settings: &AppSettings,
 ) -> Result<GrafanaDiscovery, String> {
     let datasource_result = call_tool_with_retry(
-        &mut client,
+        client,
         &settings,
         "list_datasources",
         json!({"limit":100,"offset":0}),
     )?;
     let dashboard_result = call_tool_with_retry(
-        &mut client,
+        client,
         &settings,
         "search_dashboards",
         json!({"limit":100,"page":1}),
@@ -397,7 +397,10 @@ fn discover_resources(
     let mut dashboards = Vec::new();
     collect_datasources(&mcp_payload(&datasource_result), &mut datasources);
     collect_dashboards(&mcp_payload(&dashboard_result), &mut dashboards);
-    Ok(GrafanaDiscovery { datasources, dashboards })
+    Ok(GrafanaDiscovery {
+        datasources,
+        dashboards,
+    })
 }
 
 #[tauri::command]
@@ -584,10 +587,15 @@ fn execute_monitor(
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     let mut client = connect_with_retry(settings)?;
     let discovery = discover_resources(&mut client, settings)?;
-    let prometheus_uids: Vec<String> = discovery.datasources.iter()
-        .filter(|source| settings.selected_datasource_uids.contains(&source.uid)
-            && source.kind.to_ascii_lowercase().contains("prometheus"))
-        .map(|source| source.uid.clone()).collect();
+    let prometheus_uids: Vec<String> = discovery
+        .datasources
+        .iter()
+        .filter(|source| {
+            settings.selected_datasource_uids.contains(&source.uid)
+                && source.kind.to_ascii_lowercase().contains("prometheus")
+        })
+        .map(|source| source.uid.clone())
+        .collect();
     let now = Local::now();
     let mut events = Vec::new();
     let mut errors = Vec::new();
@@ -596,16 +604,26 @@ fn execute_monitor(
     for rule in &settings.alert_rules {
         let mut values = Vec::new();
         for datasource_uid in &prometheus_uids {
-            match call_tool_with_retry(&mut client, settings, "query_prometheus", json!({
-                "datasourceUid": datasource_uid, "expr": rule.expr, "queryType": "instant",
-                "startTime": "now", "endTime": "now"
-            })).and_then(|value| extract_metric_values(&value)) {
+            match call_tool_with_retry(
+                &mut client,
+                settings,
+                "query_prometheus",
+                json!({
+                    "datasourceUid": datasource_uid, "expr": rule.expr, "queryType": "instant",
+                    "startTime": "now", "endTime": "now"
+                }),
+            )
+            .and_then(|value| extract_metric_values(&value))
+            {
                 Ok(mut found) => values.append(&mut found),
                 Err(error) => errors.push(format!("{} / {}：{}", rule.name, datasource_uid, error)),
             }
         }
-        let value = match rule.operator.aggregate(values.into_iter())
-            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string()) {
+        let value = match rule
+            .operator
+            .aggregate(values.into_iter())
+            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string())
+        {
             Ok(value) => value,
             Err(error) => {
                 errors.push(format!("{}：{}", rule.name, error));
@@ -654,8 +672,12 @@ fn execute_monitor(
         }
     }
     let collected_at = now.to_rfc3339();
-    match call_tool_with_retry(&mut client, settings, "alerting_manage_rules",
-        json!({"operation":"list", "rule_limit":200, "limit_alerts":20})) {
+    match call_tool_with_retry(
+        &mut client,
+        settings,
+        "alerting_manage_rules",
+        json!({"operation":"list", "rule_limit":200, "limit_alerts":20}),
+    ) {
         Ok(alerts) => {
             conn.execute("INSERT INTO grafana_snapshots(kind,resource_uid,payload_json,collected_at) VALUES ('alerts','grafana',?1,?2)",
                 params![mcp_payload(&alerts).to_string(), collected_at]).map_err(|e| e.to_string())?;
@@ -663,7 +685,12 @@ fn execute_monitor(
         Err(error) => errors.push(format!("Grafana 告警：{}", error)),
     }
     for dashboard_uid in &settings.selected_dashboard_uids {
-        match call_tool_with_retry(&mut client, settings, "get_dashboard_panel_queries", json!({"uid":dashboard_uid})) {
+        match call_tool_with_retry(
+            &mut client,
+            settings,
+            "get_dashboard_panel_queries",
+            json!({"uid":dashboard_uid}),
+        ) {
             Ok(panels) => {
                 conn.execute("INSERT INTO grafana_snapshots(kind,resource_uid,payload_json,collected_at) VALUES ('dashboard_panels',?1,?2,?3)",
                     params![dashboard_uid, mcp_payload(&panels).to_string(), collected_at]).map_err(|e| e.to_string())?;
