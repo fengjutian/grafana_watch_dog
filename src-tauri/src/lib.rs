@@ -7,6 +7,8 @@ use tauri::{Emitter, Manager, State};
 
 mod mcp;
 mod monitor;
+mod ai;
+mod credentials;
 use mcp::{
     install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
 };
@@ -40,6 +42,8 @@ struct AppSettings {
     alert_cooldown_minutes: i64,
     #[serde(default = "default_alert_rules")]
     alert_rules: Vec<AlertRule>,
+    #[serde(default = "default_retry_attempts")]
+    mcp_retry_attempts: u32,
 }
 
 fn default_monitor_interval() -> u64 {
@@ -47,6 +51,9 @@ fn default_monitor_interval() -> u64 {
 }
 fn default_cooldown() -> i64 {
     30
+}
+fn default_retry_attempts() -> u32 {
+    3
 }
 fn default_alert_rules() -> Vec<AlertRule> {
     vec![
@@ -75,6 +82,7 @@ impl Default for AppSettings {
             prometheus_datasource_uid: String::new(),
             alert_cooldown_minutes: default_cooldown(),
             alert_rules: default_alert_rules(),
+            mcp_retry_attempts: default_retry_attempts(),
         }
     }
 }
@@ -135,10 +143,16 @@ fn generate_report() -> Result<Value, String> {
 fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app)?;
     if !path.exists() {
-        return Ok(AppSettings::default());
+        let mut settings = AppSettings::default();
+        settings.grafana_token = credentials::load_grafana_token();
+        settings.ai_key = credentials::load_ai_key();
+        return Ok(settings);
     }
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let mut settings: AppSettings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    settings.grafana_token = credentials::load_grafana_token();
+    settings.ai_key = credentials::load_ai_key();
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -147,6 +161,7 @@ fn save_settings(
     runtime: State<'_, RuntimeSettings>,
     settings: AppSettings,
 ) -> Result<(), String> {
+    credentials::save(&settings.grafana_token, &settings.ai_key)?;
     *runtime
         .0
         .lock()
