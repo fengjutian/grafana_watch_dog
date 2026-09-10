@@ -140,7 +140,13 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
           rule_name TEXT NOT NULL, value REAL NOT NULL, unit TEXT NOT NULL,
           collected_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_metric_samples_rule_time ON metric_samples(rule_id, collected_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_metric_samples_rule_time ON metric_samples(rule_id, collected_at DESC);
+        CREATE TABLE IF NOT EXISTS grafana_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+          resource_uid TEXT NOT NULL, payload_json TEXT NOT NULL,
+          collected_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_grafana_snapshots_time ON grafana_snapshots(collected_at DESC);",
     )
 }
 
