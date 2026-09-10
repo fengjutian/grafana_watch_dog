@@ -12,6 +12,7 @@
 - 基于真实告警事件的 OpenAI-compatible AI 异常分析
 - 告警历史页面、实时事件更新与触发/恢复记录
 - MCP 指数退避重试和配置、握手、工具发现、Grafana 鉴权分阶段诊断
+- 手动或每日定时采集 Grafana Prometheus 指标并生成真实运行日报
 - Rust/Tauri 命令层和 SQLite 日报存储
 - 官方 `mcp-grafana` 进程托管、MCP initialize 握手、工具发现与工具调用基础能力
 - MCP 页面一键安装：优先复用已有程序，其次使用官方推荐的 `uvx`，最后通过 Go 安装到应用私有工具目录
@@ -50,7 +51,7 @@ Grafana → mcp-grafana (read-only) → Rust collector
         → SQLite → React UI
 ```
 
-前后端围绕 `Report` JSON 契约解耦。SQLite 中没有真实日报时，界面展示空状态。当前日报采集器尚未接入，调用生成命令会返回明确错误，不会写入占位记录。
+前后端围绕 `Report` JSON 契约解耦。SQLite 中没有真实日报时，界面展示空状态。日报采集器会通过 MCP 执行设置中的 PromQL 规则，保存指标样本，再聚合健康分、趋势、异常问题和摘要；查询无有效结果时不会写入日报。
 
 ## 官方 Grafana MCP
 
@@ -87,6 +88,7 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 - 指标恢复后会发送恢复提醒。状态和最近 100 条事件存储于 SQLite。
 - “立即检查”可验证数据源 UID、MCP 返回格式和全部规则。
 - 应用重启后会从系统 Keychain 读取 Token，可继续执行定时监控。
+- 开启“自动生成日报”后，应用每天在指定本地时间采集一次；如果启动时已经超过计划时间且当天尚未尝试，也会执行当天任务。
 
 ## 项目结构
 
@@ -103,6 +105,6 @@ src-tauri/capabilities/          Tauri 最小权限声明
 
 ## 下一阶段
 
-1. 在现有 MCP `call_tool` 基础上实现 Report Collector，映射 `query_prometheus`、`query_loki_logs` 和 Alerting 工具。
+1. 扩展 Report Collector，增加 Loki 和 Grafana Alerting 的日报证据。
 2. 为 AI 分析增加结构化输出和结果持久化。
 3. 增加查询审计、通知渠道和报告导出。
