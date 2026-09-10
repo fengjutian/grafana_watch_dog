@@ -22,7 +22,7 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   localStorage.setItem("ai-ops-settings", JSON.stringify({ ...settings, grafanaToken: "", aiKey: "" }));
 }
 export async function testConnection(settings: AppSettings): Promise<string> {
-  if (isTauri()) return invoke("test_mcp_connection", { settings });
+  if (isTauri()) return invoke("test_connection", { settings });
   throw new Error("MCP 连接测试仅支持 Tauri 桌面运行环境");
 }
 

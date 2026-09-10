@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Tooltip } from "@mantine/core";
-import { IconActivityHeartbeat, IconAdjustments, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
+import { IconAdjustments, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
 import { generateReport, installMcpGrafana, listMcpTools, listReports, loadSettings, runMonitorNow, saveSettings, testConnection } from "../../infrastructure/tauri/client";
 import { defaultSettings } from "../../domain/settings/defaults";
@@ -13,6 +13,17 @@ const nav: { id: Page; label: string }[] = [
   { id: "dashboard", label: "运行总览" }, { id: "reports", label: "日报历史" }, { id: "analysis", label: "AI 分析" },
   { id: "mcp", label: "MCP 服务" }, { id: "settings", label: "系统设置" },
 ];
+
+function WatchDogMark({ size = 38 }: { size?: number }) {
+  return <img className="watchdog-mark" src="/watchdog-mark.svg" width={size} height={size} alt="" />;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  return fallback;
+}
 
 function statusLabel(status: Status) { return ({ critical: "严重", high: "高风险", warning: "需关注", healthy: "健康" })[status]; }
 function scoreTone(score: number) { return score >= 90 ? "green" : score >= 75 ? "amber" : score >= 60 ? "orange" : "red"; }
@@ -71,9 +82,9 @@ function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; sec
   useEffect(() => setForm(initial), [initial]);
   const field = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setForm({ ...form, [key]: value });
   const ruleField = (index: number, key: "threshold" | "forChecks", value: number) => setForm(current => ({ ...current, alertRules: current.alertRules.map((rule, i) => i === index ? { ...rule, [key]: value } : rule) }));
-  const test = async () => { setTesting(true); setMessage(""); try { const result = await testConnection(form); setTools(await listMcpTools(form)); setMessage(result); } catch (e) { setTools([]); setMessage(e instanceof Error ? e.message : "连接失败"); } finally { setTesting(false); } };
+  const test = async () => { setTesting(true); setMessage(""); try { const result = await testConnection(form); setTools(await listMcpTools(form)); setMessage(result); } catch (e) { setTools([]); setMessage(errorMessage(e, "连接失败")); } finally { setTesting(false); } };
   const save = async () => { await saveSettings(form); onSaved(form); setMessage("设置已保存；监控计划已立即更新，敏感凭据不会写入磁盘。"); };
-  const checkNow = async () => { setChecking(true); setMessage(""); try { const result = await runMonitorNow(form); setMessage(`检查 ${result.checked} 条规则，产生 ${result.events.length} 条通知${result.errors.length ? `；${result.errors.join("；")}` : ""}`); } catch (error) { setMessage(error instanceof Error ? error.message : "检查失败"); } finally { setChecking(false); } };
+  const checkNow = async () => { setChecking(true); setMessage(""); try { const result = await runMonitorNow(form); setMessage(`检查 ${result.checked} 条规则，产生 ${result.events.length} 条通知${result.errors.length ? `；${result.errors.join("；")}` : ""}`); } catch (error) { setMessage(errorMessage(error, "检查失败")); } finally { setChecking(false); } };
   const install = async () => {
     setInstalling(true); setMessage("正在下载并准备官方 mcp-grafana…");
     try {
@@ -84,7 +95,7 @@ function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; sec
       if (next.grafanaToken && next.grafanaUrl) {
         setTools(await listMcpTools(next)); setMessage(`${result.message}，并已连接 Grafana。`);
       } else { setMessage(`${result.message}。请填写 Grafana Token 后测试连接。`); }
-    } catch (error) { setMessage(error instanceof Error ? error.message : "安装失败"); }
+    } catch (error) { setMessage(errorMessage(error, "安装失败")); }
     finally { setInstalling(false); }
   };
   const isMcp = section === "mcp";
@@ -97,7 +108,7 @@ function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; sec
 
 export default function WatchDogWorkspace() {
   const [page, setPage] = useState<Page>("dashboard"); const [reports, setReports] = useState<Report[]>([]); const [selected, setSelected] = useState<Report | null>(null); const [settings, setSettings] = useState(defaultSettings); const [generating, setGenerating] = useState(false); const [toast, setToast] = useState(""); const [loadError, setLoadError] = useState("");
-  useEffect(() => { listReports().then(setReports).catch(error => setLoadError(error instanceof Error ? error.message : "读取日报失败")); loadSettings().then(setSettings).catch(error => setLoadError(error instanceof Error ? error.message : "读取设置失败")); }, []);
+  useEffect(() => { listReports().then(setReports).catch(error => setLoadError(errorMessage(error, "读取日报失败"))); loadSettings().then(setSettings).catch(error => setLoadError(errorMessage(error, "读取设置失败"))); }, []);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false; const cleanups: (() => void)[] = [];
@@ -117,7 +128,7 @@ export default function WatchDogWorkspace() {
   }, []);
   const report = selected ?? reports[0];
   const title = useMemo(() => nav.find(n => n.id === page)?.label, [page]);
-  const run = async () => { setGenerating(true); try { const next = await generateReport(); setReports(old => [next, ...old.filter(r => r.id !== next.id)]); setSelected(next); setToast("今日日报生成完成"); } catch (error) { setToast(error instanceof Error ? error.message : "日报生成失败"); } finally { setGenerating(false); setTimeout(() => setToast(""), 6000); } };
+  const run = async () => { setGenerating(true); try { const next = await generateReport(); setReports(old => [next, ...old.filter(r => r.id !== next.id)]); setSelected(next); setToast("今日日报生成完成"); } catch (error) { setToast(errorMessage(error, "日报生成失败")); } finally { setGenerating(false); setTimeout(() => setToast(""), 6000); } };
   const navigate = (p: Page) => { setPage(p); if (p !== "reports") setSelected(null); };
-  return <div className="app"><aside className="sidebar"><div className="brand"><span><IconActivityHeartbeat size={21} /></span><div><b>Grafana Watch Dog</b><small>AIOPS DAILY</small></div></div><nav>{nav.map(n => { const NavIcon = icons[n.id]; return <button key={n.id} className={page === n.id ? "active" : ""} onClick={() => navigate(n.id)}><i><NavIcon size={18} /></i>{n.label}</button>; })}</nav><div className="sidebar-bottom"><div className="connection"><i /><span><b>{settings.monitorEnabled ? "监控运行中" : "监控未启用"}</b><small>{settings.monitorEnabled ? `每 ${settings.monitorIntervalMinutes} 分钟检查` : "等待 Grafana 配置"}</small></span></div><button className="profile"><span>CF</span><div><b>Ops Admin</b><small>本地工作区</small></div><i>•••</i></button></div></aside><main><header><button className="mobile-brand"><IconActivityHeartbeat size={18} /></button><span>{title}</span><div><span className="readonly">◉ 只读模式</span><Tooltip label="刷新"><button className="icon-btn" aria-label="刷新"><IconRefresh size={16} /></button></Tooltip></div></header><div className="content">{loadError && <div className="load-error">{loadError}</div>}{page === "dashboard" && (report ? <Dashboard report={report} onGenerate={run} generating={generating} /> : <><div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW</p><h1>运行总览</h1><p>仅展示实际采集并持久化的运行数据。</p></div></div><EmptyState title="暂无真实运行数据" detail="请先配置 Grafana MCP。真实日报采集器接入前不会生成占位报告。" /></>)}{page === "reports" && !selected && <Reports reports={reports} onSelect={setSelected} />}{page === "reports" && selected && <><button className="back" onClick={() => setSelected(null)}>← 返回日报历史</button><Dashboard report={selected} onGenerate={run} generating={generating} /></>}{page === "analysis" && <Analysis />}{page === "mcp" && <SettingsPage initial={settings} section="mcp" onSaved={setSettings} />}{page === "settings" && <SettingsPage initial={settings} section="settings" onSaved={setSettings} />}</div></main>{toast && <div className="toast">{toast}</div>}</div>;
+  return <div className="app"><aside className="sidebar"><div className="brand"><WatchDogMark /><div><b>Grafana Watch Dog</b><small>AIOPS CONTROL</small></div></div><nav>{nav.map(n => { const NavIcon = icons[n.id]; return <button key={n.id} className={page === n.id ? "active" : ""} onClick={() => navigate(n.id)}><i><NavIcon size={17} /></i>{n.label}</button>; })}</nav><div className="sidebar-bottom"><div className="connection"><i /><span><b>{settings.monitorEnabled ? "监控运行中" : "监控未启用"}</b><small>{settings.monitorEnabled ? `每 ${settings.monitorIntervalMinutes} 分钟检查` : "等待 Grafana 配置"}</small></span></div><button className="profile"><span>CF</span><div><b>Ops Admin</b><small>本地工作区</small></div><i>•••</i></button></div></aside><main><header><button className="mobile-brand"><WatchDogMark size={25} /></button><span>{title}</span><div><span className="readonly"><i />只读模式</span><Tooltip label="刷新"><button className="icon-btn" aria-label="刷新"><IconRefresh size={15} /></button></Tooltip></div></header><div className="content">{loadError && <div className="load-error">{loadError}</div>}{page === "dashboard" && (report ? <Dashboard report={report} onGenerate={run} generating={generating} /> : <><div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW</p><h1>运行总览</h1><p>仅展示实际采集并持久化的运行数据。</p></div></div><EmptyState title="暂无真实运行数据" detail="请先配置 Grafana MCP。真实日报采集器接入前不会生成占位报告。" /></>)}{page === "reports" && !selected && <Reports reports={reports} onSelect={setSelected} />}{page === "reports" && selected && <><button className="back" onClick={() => setSelected(null)}>← 返回日报历史</button><Dashboard report={selected} onGenerate={run} generating={generating} /></>}{page === "analysis" && <Analysis />}{page === "mcp" && <SettingsPage initial={settings} section="mcp" onSaved={setSettings} />}{page === "settings" && <SettingsPage initial={settings} section="settings" onSaved={setSettings} />}</div></main>{toast && <div className="toast">{toast}</div>}</div>;
 }
