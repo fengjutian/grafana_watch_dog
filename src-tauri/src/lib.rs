@@ -18,7 +18,7 @@ mod monitor;
 use mcp::{
     install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
 };
-use monitor::{evaluate, extract_metric_values, AlertEvent, AlertRule, AlertState, Comparison};
+use monitor::{evaluate, extract_metric_samples, extract_metric_values, AlertEvent, AlertRule, AlertState, Comparison, MetricSample};
 
 struct Database(Mutex<Connection>);
 struct RuntimeSettings(Mutex<AppSettings>);
@@ -568,6 +568,9 @@ struct MonitorRunResult {
 struct MetricReading {
     rule: AlertRule,
     value: f64,
+    instance: String,
+    job: String,
+    datasource_uid: String,
 }
 
 fn execute_monitor(
@@ -602,7 +605,7 @@ fn execute_monitor(
     let mut readings = Vec::new();
 
     for rule in &settings.alert_rules {
-        let mut values = Vec::new();
+        let mut samples: Vec<(MetricSample, String)> = Vec::new();
         for datasource_uid in &prometheus_uids {
             match call_tool_with_retry(
                 &mut client,
@@ -613,41 +616,48 @@ fn execute_monitor(
                     "startTime": "now", "endTime": "now"
                 }),
             )
-            .and_then(|value| extract_metric_values(&value))
+            .and_then(|value| extract_metric_samples(&value))
             {
-                Ok(mut found) => values.append(&mut found),
+                Ok(found) => samples.extend(found.into_iter().map(|sample| (sample, datasource_uid.clone()))),
                 Err(error) => errors.push(format!("{} / {}：{}", rule.name, datasource_uid, error)),
             }
         }
-        let value = match rule
-            .operator
-            .aggregate(values.into_iter())
-            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string())
-        {
-            Ok(value) => value,
+        let selected = samples.into_iter().reduce(|current, candidate| {
+            let chosen = rule.operator.aggregate([current.0.value, candidate.0.value].into_iter()).unwrap_or(current.0.value);
+            if (chosen - candidate.0.value).abs() < f64::EPSILON { candidate } else { current }
+        });
+        let (sample, datasource_uid) = match selected.ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string()) {
+            Ok(sample) => sample,
             Err(error) => {
                 errors.push(format!("{}：{}", rule.name, error));
                 continue;
             }
         };
+        let value = sample.value;
+        let mut instance_rule = rule.clone();
+        instance_rule.id = format!("{}@{}@{}", rule.id, datasource_uid, sample.instance);
+        instance_rule.name = format!("{} · {}", rule.name, sample.instance);
         let previous = conn
             .query_row(
                 "SELECT state_json FROM alert_states WHERE rule_id=?1",
-                [&rule.id],
+                [&instance_rule.id],
                 |row| row.get::<_, String>(0),
             )
             .ok()
             .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
         conn.execute(
             "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at) VALUES (?1,?2,?3,?4,?5)",
-            params![rule.id, rule.name, value, rule.unit, now.to_rfc3339()],
+            params![instance_rule.id, instance_rule.name, value, rule.unit, now.to_rfc3339()],
         ).map_err(|e| e.to_string())?;
         readings.push(MetricReading {
-            rule: rule.clone(),
+            rule: instance_rule.clone(),
             value,
+            instance: sample.instance,
+            job: sample.job,
+            datasource_uid,
         });
         let (state, event) = evaluate(
-            rule,
+            &instance_rule,
             value,
             previous,
             settings.alert_cooldown_minutes.max(0),
@@ -656,7 +666,7 @@ fn execute_monitor(
         conn.execute(
             "INSERT OR REPLACE INTO alert_states(rule_id,state_json) VALUES (?1,?2)",
             params![
-                rule.id,
+                instance_rule.id,
                 serde_json::to_string(&state).map_err(|e| e.to_string())?
             ],
         )
@@ -749,9 +759,9 @@ fn generate_and_store_report(
         };
         services.push(json!({
             "name": reading.rule.name,
-            "kind": "Prometheus",
+            "kind": format!("服务器 {} · Prometheus", reading.instance),
             "score": service_score,
-            "metrics": [format!("{:.2}{}", reading.value, reading.rule.unit), format!("阈值 {:.2}{}", reading.rule.threshold, reading.rule.unit)]
+            "metrics": [format!("{:.2}{}", reading.value, reading.rule.unit), format!("数据源 {}", reading.datasource_uid), format!("Job {}", if reading.job.is_empty() { "-" } else { &reading.job })]
         }));
 
         let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 ORDER BY collected_at DESC LIMIT 7").map_err(|e| e.to_string())?;
@@ -774,9 +784,9 @@ fn generate_and_store_report(
                 "id": reading.rule.id,
                 "severity": reading.rule.severity,
                 "title": format!("{}超过告警阈值", reading.rule.name),
-                "source": "Grafana MCP · Prometheus",
+                "source": format!("服务器 {} · 数据源 {}", reading.instance, reading.datasource_uid),
                 "change": format!("{:.2}{}", reading.value, reading.rule.unit),
-                "reason": format!("实际值 {:.2}{}，配置阈值 {:.2}{}。", reading.value, reading.rule.unit, reading.rule.threshold, reading.rule.unit),
+                "reason": format!("服务器 {}（job={}）实际值 {:.2}{}，配置阈值 {:.2}{}。", reading.instance, reading.job, reading.value, reading.rule.unit, reading.rule.threshold, reading.rule.unit),
                 "recommendations": ["核对对应实例和标签", "检查同一时间窗口的日志与发布记录", "确认指标是否持续异常"]
             }));
         }
