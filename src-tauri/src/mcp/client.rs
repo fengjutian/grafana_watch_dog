@@ -95,11 +95,19 @@ impl GrafanaMcpClient {
             "tools/call",
             json!({ "name": name, "arguments": arguments }),
         )?;
-        if result.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+        if result
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             let detail = result
                 .get("content")
                 .and_then(Value::as_array)
-                .and_then(|items| items.iter().find_map(|item| item.get("text").and_then(Value::as_str)))
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find_map(|item| item.get("text").and_then(Value::as_str))
+                })
                 .unwrap_or("MCP 工具返回错误");
             return Err(detail.to_owned());
         }

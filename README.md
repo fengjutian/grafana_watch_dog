@@ -9,6 +9,9 @@
 - 系统健康总览、服务评分、7 天趋势和优先问题队列
 - 结构化日报与历史日报详情
 - Grafana MCP、AI Provider、定时计划配置界面
+- 基于真实告警事件的 OpenAI-compatible AI 异常分析
+- 告警历史页面、实时事件更新与触发/恢复记录
+- MCP 指数退避重试和配置、握手、工具发现、Grafana 鉴权分阶段诊断
 - Rust/Tauri 命令层和 SQLite 日报存储
 - 官方 `mcp-grafana` 进程托管、MCP initialize 握手、工具发现与工具调用基础能力
 - MCP 页面一键安装：优先复用已有程序，其次使用官方推荐的 `uvx`，最后通过 Go 安装到应用私有工具目录
@@ -72,7 +75,7 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 
 - MVP 只读，不执行重启、修改 Dashboard、SQL 写入等操作。
 - MCP 配置必须包含 `--disable-write`。
-- 设置文件和 SQLite 都不会持久化 Token/API Key；当前版本关闭应用后需重新输入。生产接入应使用系统 Keychain。
+- Token 和 API Key 仅保存到操作系统 Keychain，不写入设置文件或 SQLite。
 - 推荐 Grafana Service Account 仅授予所需 datasource 的查询权限。
 
 ## 定时 MCP 监控与提醒
@@ -83,7 +86,7 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 - 支持连续多次超限后触发，避免瞬时毛刺；持续异常只在冷却期结束后重复提醒。
 - 指标恢复后会发送恢复提醒。状态和最近 100 条事件存储于 SQLite。
 - “立即检查”可验证数据源 UID、MCP 返回格式和全部规则。
-- Token 只保存在当前应用进程内，因此应用重启后需要重新输入。需要系统重启后无人值守监控时，应先接入系统 Keychain。
+- 应用重启后会从系统 Keychain 读取 Token，可继续执行定时监控。
 
 ## 项目结构
 
@@ -101,6 +104,5 @@ src-tauri/capabilities/          Tauri 最小权限声明
 ## 下一阶段
 
 1. 在现有 MCP `call_tool` 基础上实现 Report Collector，映射 `query_prometheus`、`query_loki_logs` 和 Alerting 工具。
-2. 增加 OpenAI-compatible Provider，使用 JSON Schema 校验结构化输出。
-3. 把凭据接入 Windows Credential Manager / macOS Keychain / Secret Service。
-4. 增加失败重试、查询审计、系统 Keychain 与报告导出。
+2. 为 AI 分析增加结构化输出和结果持久化。
+3. 增加查询审计、通知渠道和报告导出。
