@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Tooltip } from "@mantine/core";
 import { IconAdjustments, IconBell, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
@@ -74,7 +74,7 @@ function Reports({ reports, onSelect }: { reports: Report[]; onSelect: (r: Repor
   return <><div className="page-title"><div><p className="eyebrow">REPORT ARCHIVE</p><h1>日报历史</h1><p>回看系统健康度变化，快速定位状态转折点。</p></div></div>{reports.length === 0 ? <EmptyState title="暂无真实日报" detail="SQLite 中还没有采集生成的日报记录。" /> : <div className="card report-table"><div className="table-head"><span>日期</span><span>健康度</span><span>状态</span><span>关键摘要</span><span /></div>{reports.map((r) => <button className="report-row" key={r.id} onClick={() => onSelect(r)}><span><b>{r.date}</b><small>{r.generatedAt}</small></span><span className={`score ${scoreTone(r.score)}`}>{r.score}</span><span><i className={`status-pill ${r.status}`}>● {statusLabel(r.status)}</i></span><span>{r.summary}</span><span>→</span></button>)}</div>}</>;
 }
 
-function EmptyState({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) {
+function EmptyState({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
   return <div className="card empty-state"><span>◇</span><h2>{title}</h2><p>{detail}</p>{action}</div>;
 }
 
