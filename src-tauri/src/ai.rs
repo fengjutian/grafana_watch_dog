@@ -44,5 +44,6 @@ mod tests {
     fn creates_compatible_endpoint() {
         assert_eq!(chat_completions_endpoint("https://api.openai.com/v1"), "https://api.openai.com/v1/chat/completions");
         assert_eq!(chat_completions_endpoint("https://api.deepseek.com"), "https://api.deepseek.com/v1/chat/completions");
+        assert_eq!(chat_completions_endpoint("https://api.minimaxi.com/v1"), "https://api.minimaxi.com/v1/chat/completions");
     }
 }

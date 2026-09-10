@@ -91,10 +91,19 @@ impl GrafanaMcpClient {
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
-        self.request(
+        let result = self.request(
             "tools/call",
             json!({ "name": name, "arguments": arguments }),
-        )
+        )?;
+        if result.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+            let detail = result
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|items| items.iter().find_map(|item| item.get("text").and_then(Value::as_str)))
+                .unwrap_or("MCP 工具返回错误");
+            return Err(detail.to_owned());
+        }
+        Ok(result)
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {

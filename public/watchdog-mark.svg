@@ -1,13 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Grafana Watch Dog">
   <defs>
-    <linearGradient id="g" x1="9" y1="8" x2="57" y2="58" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ffb357"/><stop offset=".5" stop-color="#ff780a"/><stop offset="1" stop-color="#f04405"/>
+    <linearGradient id="sun" x1="12" y1="8" x2="53" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffc857"/><stop offset=".5" stop-color="#ff920f"/><stop offset="1" stop-color="#ff5c00"/>
     </linearGradient>
   </defs>
-  <path d="M49.7 17.3c6.6 4.7 9.2 12.9 6.7 20.4-2.5 7.4-9.5 12.8-17.6 13.1" fill="none" stroke="url(#g)" stroke-width="5" stroke-linecap="round"/>
-  <path d="M50.6 14.6l1.2 7.5-7.3-2.1" fill="none" stroke="#ff8a1f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M16.4 24.1 11 15.4c-.8-1.4.4-3.1 2-2.7l10.2 2.7A22.1 22.1 0 0 1 32 13.6c3.1 0 6.1.6 8.8 1.8L51 12.7c1.6-.4 2.8 1.3 2 2.7l-5.4 8.7a18.4 18.4 0 0 1 2.1 8.6c0 10-7.9 17.7-17.7 17.7s-17.7-7.7-17.7-17.7c0-3.1.8-6.1 2.1-8.6Z" fill="#171b1f" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M23.4 33.4c1.4 0 2.5-1.3 2.5-2.9s-1.1-2.9-2.5-2.9-2.5 1.3-2.5 2.9 1.1 2.9 2.5 2.9Zm17.2 0c1.4 0 2.5-1.3 2.5-2.9s-1.1-2.9-2.5-2.9-2.5 1.3-2.5 2.9 1.1 2.9 2.5 2.9Z" fill="#ff8a1f"/>
-  <path d="M27.5 38.3c1.9-1.2 7.1-1.2 9 0 .8.5.8 1.6 0 2.2L32 43.7l-4.5-3.2c-.8-.6-.8-1.7 0-2.2Z" fill="#fff"/>
-  <path d="M32 43.5v2.2M26.5 45.2c1.4 1.3 3.3 2 5.5 2s4.1-.7 5.5-2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="27" fill="#fff8ec"/>
+  <path d="M47.5 16.5c7.5 6.4 9.1 17.7 3.3 25.8-4.4 6.2-12 8.8-19 7" fill="none" stroke="url(#sun)" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="m47 11.5 1.3 8.2-7.9-2.4" fill="none" stroke="#ff970f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19.2 26.1 15 17l10.8 4.2c2-1 4.1-1.5 6.2-1.5s4.3.5 6.2 1.5L49 17l-4.2 9.1c1.1 2 1.7 4.2 1.7 6.5 0 7.5-6.5 13.7-14.5 13.7s-14.5-6.2-14.5-13.7c0-2.3.6-4.5 1.7-6.5Z" fill="url(#sun)" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/>
+  <path d="M23.5 30.4c1.2-1.2 3.1-1.2 4.3 0M36.2 30.4c1.2-1.2 3.1-1.2 4.3 0" fill="none" stroke="#63320c" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M28.4 35.8c1.7-1.4 5.5-1.4 7.2 0l-3.6 3.4-3.6-3.4Z" fill="#63320c"/>
+  <path d="M32 39v2.2m-5.1-.2c1.2 1.5 3 2.3 5.1 2.3s3.9-.8 5.1-2.3" fill="none" stroke="#63320c" stroke-width="2" stroke-linecap="round"/>
 </svg>

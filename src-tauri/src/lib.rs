@@ -71,9 +71,9 @@ impl Default for AppSettings {
             grafana_token: String::new(),
             mcp_command: "mcp-grafana".into(),
             mcp_args: "--transport stdio --disable-write --enabled-tools search,datasource,prometheus,loki,alerting,dashboard".into(),
-            ai_provider: "DeepSeek".into(),
-            ai_base_url: "https://api.deepseek.com".into(),
-            ai_model: "deepseek-chat".into(),
+            ai_provider: "MiniMax（国内）".into(),
+            ai_base_url: "https://api.minimaxi.com/v1".into(),
+            ai_model: "MiniMax-M2.7".into(),
             ai_key: String::new(),
             schedule_enabled: false,
             schedule_time: "08:00".into(),
@@ -209,6 +209,27 @@ fn connect_with_retry(settings: &AppSettings) -> Result<GrafanaMcpClient, String
     Err(last_error)
 }
 
+fn call_tool_with_retry(
+    client: &mut GrafanaMcpClient,
+    settings: &AppSettings,
+    name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    let attempts = settings.mcp_retry_attempts.clamp(1, 5);
+    let mut last_error = String::new();
+    for attempt in 1..=attempts {
+        match client.call_tool(name, arguments.clone()) {
+            Ok(value) => return Ok(value),
+            Err(error) => last_error = format!("第 {attempt}/{attempts} 次：{error}"),
+        }
+        if attempt < attempts {
+            thread::sleep(Duration::from_millis(300 * 2_u64.pow(attempt - 1)));
+            *client = connect_with_retry(settings)?;
+        }
+    }
+    Err(last_error)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticStep {
@@ -266,7 +287,7 @@ fn diagnose_connection(settings: AppSettings) -> ConnectionDiagnostic {
     };
     let auth = Instant::now();
     let auth_result = if tools.iter().any(|tool| tool.name == "list_datasources") {
-        client.call_tool("list_datasources", json!({"limit":1})).map(|_| "Grafana API 鉴权成功".to_string())
+        call_tool_with_retry(&mut client, &settings, "list_datasources", json!({"limit":1})).map(|_| "Grafana API 鉴权成功".to_string())
     } else {
         Err("MCP 未提供 list_datasources，无法验证 Grafana 鉴权".into())
     };
@@ -309,7 +330,8 @@ fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Resul
     {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
-    connect_with_retry(&settings)?.call_tool(&name, arguments)
+    let mut client = connect_with_retry(&settings)?;
+    call_tool_with_retry(&mut client, &settings, &name, arguments)
 }
 
 #[derive(Debug, Serialize)]
@@ -342,15 +364,14 @@ fn execute_monitor(
     let mut errors = Vec::new();
 
     for rule in &settings.alert_rules {
-        let response = client.call_tool(
-            "query_prometheus",
+        let response = call_tool_with_retry(&mut client, settings, "query_prometheus",
             json!({
                 "datasourceUid": settings.prometheus_datasource_uid,
                 "expr": rule.expr,
                 "queryType": "instant",
-                "startTime": "now"
-            }),
-        );
+                "startTime": "now",
+                "endTime": "now"
+            }));
         let value = match response
             .and_then(|value| extract_metric_values(&value))
             .and_then(|values| {
