@@ -2,20 +2,19 @@
 
 基于 Tauri 2、React 和 Grafana MCP 的只读 AI 运维日报桌面应用。它把 Prometheus、Loki 和 Grafana Alerting 的信号聚合成健康评分、异常解释、趋势与处置建议。
 
-当前版本是可运行的 MVP 纵向切片：桌面端包含完整产品界面、SQLite 日报持久化、历史回看、官方 Grafana MCP stdio 客户端、MCP/模型设置和离线演示报告。
+当前版本是可运行的 MVP 纵向切片：桌面端包含产品界面、SQLite 持久化、官方 Grafana MCP stdio 客户端、MCP/模型设置和定时指标告警。项目不提供占位运行数据；所有展示结果必须来自真实采集和持久化记录。
 
 ## 已实现
 
 - 系统健康总览、服务评分、7 天趋势和优先问题队列
 - 结构化日报与历史日报详情
-- AI 调查交互及 MCP 查询范围说明
 - Grafana MCP、AI Provider、定时计划配置界面
 - Rust/Tauri 命令层和 SQLite 日报存储
 - 官方 `mcp-grafana` 进程托管、MCP initialize 握手、工具发现与工具调用基础能力
 - MCP 页面一键安装：优先复用已有程序，其次使用官方推荐的 `uvx`，最后通过 Go 安装到应用私有工具目录
 - Mantine UI、Tabler Icons、TanStack Query 应用基础设施
 - `--disable-write` 强制安全检查
-- 无 Grafana、无模型凭据时的离线演示模式
+- 无数据时的明确空状态和真实错误提示
 - 响应式桌面与窄屏布局
 
 ## 本地运行
@@ -48,7 +47,7 @@ Grafana → mcp-grafana (read-only) → Rust collector
         → SQLite → React UI
 ```
 
-前后端围绕 `Report` JSON 契约解耦。`src/infrastructure/demo/reportFixtures.ts` 和 Rust 的 `demo_report()` 提供离线数据；接入真实采集器时保持该结构即可，无需改动 UI。
+前后端围绕 `Report` JSON 契约解耦。SQLite 中没有真实日报时，界面展示空状态。当前日报采集器尚未接入，调用生成命令会返回明确错误，不会写入占位记录。
 
 ## 官方 Grafana MCP
 
@@ -92,7 +91,7 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 src/app/                         应用入口、Provider 和顶层组合
 src/features/workspace/          当前工作台功能组合（后续按页面继续拆分）
 src/domain/report/               与框架无关的日报领域模型
-src/infrastructure/demo/         可替换的演示数据适配器
+src/domain/settings/             默认连接、调度和告警规则配置
 src/infrastructure/tauri/        前端到 Tauri 的端口适配器
 src-tauri/src/mcp/               MCP 协议、进程与官方服务客户端
 src-tauri/src/lib.rs             Tauri 命令、SQLite 和配置组合根

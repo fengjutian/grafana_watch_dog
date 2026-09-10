@@ -68,7 +68,7 @@ impl Default for AppSettings {
             ai_base_url: "https://api.deepseek.com".into(),
             ai_model: "deepseek-chat".into(),
             ai_key: String::new(),
-            schedule_enabled: true,
+            schedule_enabled: false,
             schedule_time: "08:00".into(),
             monitor_enabled: false,
             monitor_interval_minutes: default_monitor_interval(),

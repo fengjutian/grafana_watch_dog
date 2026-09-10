@@ -60,7 +60,7 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
 }
 
 function Analysis() {
-  return <><div className="page-title"><div><p className="eyebrow">AI INVESTIGATION</p><h1>向运行数据提问</h1><p>这里仅展示真实查询结果。</p></div></div><EmptyState title="AI 查询尚未接入" detail="当前没有可调用的真实 AI 分析后端，因此不会返回模拟回答。" /></>;
+  return <><div className="page-title"><div><p className="eyebrow">AI INVESTIGATION</p><h1>向运行数据提问</h1><p>这里仅展示真实查询结果。</p></div></div><EmptyState title="AI 查询尚未接入" detail="当前没有可调用的真实 AI 分析后端，因此不会生成回答。" /></>;
 }
 
 function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; section: "mcp" | "settings"; onSaved: (settings: AppSettings) => void }) {
