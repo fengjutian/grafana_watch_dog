@@ -16,12 +16,15 @@ export interface AppSettings {
   scheduleEnabled: boolean; scheduleTime: string;
   monitorEnabled: boolean; monitorIntervalMinutes: number; prometheusDatasourceUid: string;
   alertCooldownMinutes: number; alertRules: AlertRule[];
+  mcpRetryAttempts: number;
 }
 
 export type AlertOperator = "greater_than" | "greater_or_equal" | "less_than" | "less_or_equal" | "equal";
 export interface AlertRule { id: string; name: string; expr: string; operator: AlertOperator; threshold: number; forChecks: number; severity: Severity; unit: string }
 export interface AlertEvent { id: string; ruleId: string; ruleName: string; severity: Severity; kind: "firing" | "resolved"; value: number; threshold: number; unit: string; message: string; createdAt: string }
 export interface MonitorRunResult { checked: number; events: AlertEvent[]; errors: string[]; completedAt: string }
+export interface DiagnosticStep { name: string; success: boolean; detail: string; durationMs: number }
+export interface ConnectionDiagnostic { success: boolean; attempts: number; steps: DiagnosticStep[] }
 
 export interface McpTool { name: string; description: string }
 export interface McpInstallResult { command: string; argsPrefix: string[]; method: "existing" | "uvx" | "go"; message: string }

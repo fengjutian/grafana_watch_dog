@@ -2,7 +2,7 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::Mutex, thread, time::Duration};
+use std::{fs, path::PathBuf, sync::Mutex, thread, time::{Duration, Instant}};
 use tauri::{Emitter, Manager, State};
 
 mod mcp;
@@ -167,7 +167,7 @@ fn save_settings(
         .lock()
         .map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
     let mut settings = settings;
-    // Secrets are deliberately excluded until an OS-keychain adapter is configured.
+    // Secrets live in the OS credential store and are never serialized to settings.json.
     settings.grafana_token.clear();
     settings.ai_key.clear();
     let raw = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
@@ -186,12 +186,93 @@ fn test_connection(settings: AppSettings) -> Result<String, String> {
     {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
-    let mut client = GrafanaMcpClient::connect(mcp_config(&settings))?;
+    let mut client = connect_with_retry(&settings)?;
     let tools = client.list_tools()?;
     Ok(format!(
         "已连接官方 mcp-grafana，共发现 {} 个只读工具",
         tools.len()
     ))
+}
+
+fn connect_with_retry(settings: &AppSettings) -> Result<GrafanaMcpClient, String> {
+    let attempts = settings.mcp_retry_attempts.clamp(1, 5);
+    let mut last_error = String::new();
+    for attempt in 1..=attempts {
+        match GrafanaMcpClient::connect(mcp_config(settings)) {
+            Ok(client) => return Ok(client),
+            Err(error) => last_error = format!("第 {attempt}/{attempts} 次：{error}"),
+        }
+        if attempt < attempts {
+            thread::sleep(Duration::from_millis(300 * 2_u64.pow(attempt - 1)));
+        }
+    }
+    Err(last_error)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticStep {
+    name: String,
+    success: bool,
+    detail: String,
+    duration_ms: u128,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionDiagnostic {
+    success: bool,
+    attempts: u32,
+    steps: Vec<DiagnosticStep>,
+}
+
+#[tauri::command]
+fn diagnose_connection(settings: AppSettings) -> ConnectionDiagnostic {
+    let mut steps = Vec::new();
+    let started = Instant::now();
+    let config_error = if settings.grafana_url.trim().is_empty() {
+        Some("Grafana 地址为空")
+    } else if settings.grafana_token.trim().is_empty() {
+        Some("Grafana Token 为空")
+    } else if !settings.mcp_args.split_whitespace().any(|arg| arg == "--disable-write") {
+        Some("启动参数缺少 --disable-write")
+    } else { None };
+    steps.push(DiagnosticStep { name:"配置检查".into(), success:config_error.is_none(), detail:config_error.unwrap_or("地址、Token 与只读参数已配置").into(), duration_ms:started.elapsed().as_millis() });
+    if config_error.is_some() {
+        return ConnectionDiagnostic { success:false, attempts:0, steps };
+    }
+
+    let handshake = Instant::now();
+    let mut client = match connect_with_retry(&settings) {
+        Ok(client) => {
+            steps.push(DiagnosticStep { name:"MCP 握手".into(), success:true, detail:"子进程启动并完成 initialize".into(), duration_ms:handshake.elapsed().as_millis() });
+            client
+        }
+        Err(error) => {
+            steps.push(DiagnosticStep { name:"MCP 握手".into(), success:false, detail:error, duration_ms:handshake.elapsed().as_millis() });
+            return ConnectionDiagnostic { success:false, attempts:settings.mcp_retry_attempts.clamp(1,5), steps };
+        }
+    };
+    let discovery = Instant::now();
+    let tools = match client.list_tools() {
+        Ok(tools) => {
+            steps.push(DiagnosticStep { name:"工具发现".into(), success:true, detail:format!("发现 {} 个工具", tools.len()), duration_ms:discovery.elapsed().as_millis() });
+            tools
+        }
+        Err(error) => {
+            steps.push(DiagnosticStep { name:"工具发现".into(), success:false, detail:error, duration_ms:discovery.elapsed().as_millis() });
+            return ConnectionDiagnostic { success:false, attempts:1, steps };
+        }
+    };
+    let auth = Instant::now();
+    let auth_result = if tools.iter().any(|tool| tool.name == "list_datasources") {
+        client.call_tool("list_datasources", json!({"limit":1})).map(|_| "Grafana API 鉴权成功".to_string())
+    } else {
+        Err("MCP 未提供 list_datasources，无法验证 Grafana 鉴权".into())
+    };
+    let success = auth_result.is_ok();
+    steps.push(DiagnosticStep { name:"Grafana 鉴权".into(), success, detail:auth_result.unwrap_or_else(|error| error), duration_ms:auth.elapsed().as_millis() });
+    ConnectionDiagnostic { success, attempts:1, steps }
 }
 
 fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
@@ -216,7 +297,7 @@ fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
     {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
-    GrafanaMcpClient::connect(mcp_config(&settings))?.list_tools()
+    connect_with_retry(&settings)?.list_tools()
 }
 
 #[tauri::command]
@@ -228,7 +309,7 @@ fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Resul
     {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
-    GrafanaMcpClient::connect(mcp_config(&settings))?.call_tool(&name, arguments)
+    connect_with_retry(&settings)?.call_tool(&name, arguments)
 }
 
 #[derive(Debug, Serialize)]
@@ -255,7 +336,7 @@ fn execute_monitor(
         return Err("安全检查失败：监控必须使用 --disable-write".into());
     }
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
-    let mut client = GrafanaMcpClient::connect(mcp_config(settings))?;
+    let mut client = connect_with_retry(settings)?;
     let now = Local::now();
     let mut events = Vec::new();
     let mut errors = Vec::new();
@@ -352,6 +433,30 @@ fn list_alert_events(app: tauri::AppHandle) -> Result<Vec<AlertEvent>, String> {
         .collect())
 }
 
+#[tauri::command]
+fn analyze_alerts(app: tauri::AppHandle, settings: AppSettings, question: String) -> Result<String, String> {
+    if question.trim().is_empty() {
+        return Err("请输入需要分析的问题".into());
+    }
+    let conn = Connection::open(db_path(&app)?).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT event_json FROM alert_events ORDER BY created_at DESC LIMIT 30").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let evidence: Vec<Value> = rows.filter_map(Result::ok).filter_map(|raw| serde_json::from_str(&raw).ok()).collect();
+    if evidence.is_empty() {
+        return Err("暂无真实告警事件，无法进行有证据的异常分析".into());
+    }
+    let attempts = settings.mcp_retry_attempts.clamp(1, 3);
+    let mut last_error = String::new();
+    for attempt in 1..=attempts {
+        match ai::analyze(&settings.ai_base_url, &settings.ai_key, &settings.ai_model, question.trim(), &json!(evidence)) {
+            Ok(answer) => return Ok(answer),
+            Err(error) => last_error = format!("第 {attempt}/{attempts} 次：{error}"),
+        }
+        if attempt < attempts { thread::sleep(Duration::from_millis(500 * 2_u64.pow(attempt - 1))); }
+    }
+    Err(last_error)
+}
+
 fn start_monitor_scheduler(app: tauri::AppHandle) {
     thread::spawn(move || {
         let mut elapsed_seconds = 0_u64;
@@ -407,10 +512,12 @@ pub fn run() {
             load_settings,
             save_settings,
             test_connection,
+            diagnose_connection,
             list_mcp_tools,
             call_mcp_tool,
             run_monitor_now,
             list_alert_events,
+            analyze_alerts,
             install_mcp_grafana
         ])
         .run(tauri::generate_context!())

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings } from "../../domain/settings/defaults";
-import type { AlertEvent, AppSettings, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, ConnectionDiagnostic, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -26,6 +26,11 @@ export async function testConnection(settings: AppSettings): Promise<string> {
   throw new Error("MCP 连接测试仅支持 Tauri 桌面运行环境");
 }
 
+export async function diagnoseConnection(settings: AppSettings): Promise<ConnectionDiagnostic> {
+  if (!isTauri()) throw new Error("连接诊断仅支持 Tauri 桌面运行环境");
+  return invoke("diagnose_connection", { settings });
+}
+
 export async function listMcpTools(settings: AppSettings): Promise<McpTool[]> {
   if (isTauri()) return invoke("list_mcp_tools", { settings });
   throw new Error("MCP 工具发现仅支持 Tauri 桌面运行环境");
@@ -49,4 +54,9 @@ export async function runMonitorNow(settings: AppSettings): Promise<MonitorRunRe
 export async function listAlertEvents(): Promise<AlertEvent[]> {
   if (!isTauri()) return [];
   return invoke("list_alert_events");
+}
+
+export async function analyzeAlerts(settings: AppSettings, question: string): Promise<string> {
+  if (!isTauri()) throw new Error("AI 分析仅支持 Tauri 桌面运行环境");
+  return invoke("analyze_alerts", { settings, question });
 }

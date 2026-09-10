@@ -15,6 +15,7 @@ export const defaultSettings: AppSettings = {
   monitorIntervalMinutes: 5,
   prometheusDatasourceUid: "",
   alertCooldownMinutes: 30,
+  mcpRetryAttempts: 3,
   alertRules: [
     { id: "cpu", name: "CPU 使用率", expr: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', operator: "greater_than", threshold: 85, forChecks: 2, severity: "critical", unit: "%" },
     { id: "memory", name: "内存使用率", expr: "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", operator: "greater_than", threshold: 90, forChecks: 1, severity: "critical", unit: "%" },

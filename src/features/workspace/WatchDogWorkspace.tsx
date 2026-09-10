@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Tooltip } from "@mantine/core";
-import { IconAdjustments, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
+import { IconAdjustments, IconBell, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
-import { generateReport, installMcpGrafana, listMcpTools, listReports, loadSettings, runMonitorNow, saveSettings, testConnection } from "../../infrastructure/tauri/client";
+import { analyzeAlerts, diagnoseConnection, generateReport, installMcpGrafana, listAlertEvents, listMcpTools, listReports, loadSettings, runMonitorNow, saveSettings } from "../../infrastructure/tauri/client";
 import { defaultSettings } from "../../domain/settings/defaults";
-import type { AlertEvent, AppSettings, Issue, McpTool, Report, Status } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, ConnectionDiagnostic, Issue, McpTool, Report, Status } from "../../domain/report/types";
 
-type Page = "dashboard" | "reports" | "analysis" | "mcp" | "settings";
+type Page = "dashboard" | "reports" | "alerts" | "analysis" | "mcp" | "settings";
 
-const icons = { dashboard: IconLayoutDashboard, reports: IconFileAnalytics, analysis: IconBrain, mcp: IconServerCog, settings: IconAdjustments };
+const icons = { dashboard: IconLayoutDashboard, reports: IconFileAnalytics, alerts: IconBell, analysis: IconBrain, mcp: IconServerCog, settings: IconAdjustments };
 const nav: { id: Page; label: string }[] = [
-  { id: "dashboard", label: "运行总览" }, { id: "reports", label: "日报历史" }, { id: "analysis", label: "AI 分析" },
+  { id: "dashboard", label: "运行总览" }, { id: "reports", label: "日报历史" }, { id: "alerts", label: "告警历史" }, { id: "analysis", label: "AI 分析" },
   { id: "mcp", label: "MCP 服务" }, { id: "settings", label: "系统设置" },
 ];
 
@@ -70,8 +70,14 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   return <div className="card empty-state"><span>◇</span><h2>{title}</h2><p>{detail}</p></div>;
 }
 
-function Analysis() {
-  return <><div className="page-title"><div><p className="eyebrow">AI INVESTIGATION</p><h1>向运行数据提问</h1><p>这里仅展示真实查询结果。</p></div></div><EmptyState title="AI 查询尚未接入" detail="当前没有可调用的真实 AI 分析后端，因此不会生成回答。" /></>;
+function Alerts({ events, loading, onRefresh }: { events: AlertEvent[]; loading: boolean; onRefresh: () => void }) {
+  return <><div className="page-title"><div><p className="eyebrow">ALERT TIMELINE</p><h1>告警历史</h1><p>查看真实触发与恢复记录，最多保留最近 100 条。</p></div><Button variant="default" leftSection={<IconRefresh size={15} />} loading={loading} onClick={onRefresh}>刷新</Button></div>{events.length === 0 ? <EmptyState title="暂无告警记录" detail="监控规则触发或恢复后，事件会显示在这里。" /> : <div className="alert-history">{events.map(event => <article className={`card alert-event ${event.kind} ${event.severity}`} key={event.id}><i>{event.kind === "resolved" ? "✓" : "!"}</i><div><div><b>{event.ruleName}</b><span className={`status-pill ${event.kind === "resolved" ? "healthy" : event.severity}`}>{event.kind === "resolved" ? "已恢复" : "告警中"}</span></div><p>{event.message}</p><small>{new Date(event.createdAt).toLocaleString("zh-CN")}</small></div><strong>{event.value.toFixed(2)}{event.unit}</strong></article>)}</div>}</>;
+}
+
+function Analysis({ settings }: { settings: AppSettings }) {
+  const [query, setQuery] = useState(""); const [answer, setAnswer] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const ask = async () => { if (!query.trim()) return; setBusy(true); setAnswer(""); setError(""); try { setAnswer(await analyzeAlerts(settings, query)); } catch (cause) { setError(errorMessage(cause, "AI 分析失败")); } finally { setBusy(false); } };
+  return <><div className="page-title"><div><p className="eyebrow">AI INVESTIGATION</p><h1>AI 异常分析</h1><p>基于最近 30 条真实告警事件生成有证据的分析。</p></div></div><div className="analysis-layout"><div className="card chat"><div className="chat-empty"><span className="ai-orb">✦</span><h2>需要分析什么异常？</h2><p>模型只会收到本地保存的告警事件，不会获得写操作能力。</p></div>{answer && <div className="answer"><span>✦</span><p>{answer}</p></div>}{error && <div className="load-error">{error}</div>}<div className="composer"><textarea value={query} onChange={event => setQuery(event.target.value)} placeholder="例如：最近告警可能由什么原因引起？" /><button className="primary" disabled={busy || !query.trim()} onClick={ask}>{busy ? "分析中…" : "发送 ↑"}</button></div></div><aside className="card evidence"><h3>分析边界</h3>{["最近 30 条告警", "触发与恢复状态", "指标值与阈值"].map((item, index) => <div key={item}><i>{index + 1}</i><span>{item}<small>真实 SQLite 记录</small></span><b>✓</b></div>)}<p>AI 输出仅供诊断参考，不会自动执行修复。</p></aside></div></>;
 }
 
 function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; section: "mcp" | "settings"; onSaved: (settings: AppSettings) => void }) {
