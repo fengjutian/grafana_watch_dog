@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Tooltip } from "@mantine/core";
 import { IconActivityHeartbeat, IconAdjustments, IconBrain, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
-import { generateReport, listReports, loadSettings, saveSettings, testConnection } from "../infrastructure/tauri/client";
+import { generateReport, listMcpTools, listReports, loadSettings, saveSettings, testConnection } from "../infrastructure/tauri/client";
 import { defaultSettings } from "../infrastructure/demo/reportFixtures";
-import type { AppSettings, Issue, Report, Status } from "../domain/report/types";
+import type { AppSettings, Issue, McpTool, Report, Status } from "../domain/report/types";
 
 type Page = "dashboard" | "reports" | "analysis" | "mcp" | "settings";
 
@@ -62,15 +62,16 @@ function Analysis({ report }: { report: Report }) {
 
 function SettingsPage({ initial, section }: { initial: AppSettings; section: "mcp" | "settings" }) {
   const [form, setForm] = useState(initial); const [message, setMessage] = useState(""); const [testing, setTesting] = useState(false);
+  const [tools, setTools] = useState<McpTool[]>([]);
   useEffect(() => setForm(initial), [initial]);
   const field = (key: keyof AppSettings, value: string | boolean) => setForm({ ...form, [key]: value });
-  const test = async () => { setTesting(true); setMessage(""); try { setMessage(await testConnection(form)); } catch (e) { setMessage(e instanceof Error ? e.message : "连接失败"); } finally { setTesting(false); } };
+  const test = async () => { setTesting(true); setMessage(""); try { const result = await testConnection(form); setTools(await listMcpTools(form)); setMessage(result); } catch (e) { setTools([]); setMessage(e instanceof Error ? e.message : "连接失败"); } finally { setTesting(false); } };
   const save = async () => { await saveSettings(form); setMessage("设置已保存；敏感凭据不会写入浏览器存储。"); };
   const isMcp = section === "mcp";
   return <><div className="page-title"><div><p className="eyebrow">{isMcp ? "CONNECTIONS" : "PREFERENCES"}</p><h1>{isMcp ? "MCP 服务" : "系统设置"}</h1><p>{isMcp ? "连接 Grafana 的只读数据入口。" : "配置模型与日报生成计划。"}</p></div></div><div className="settings-grid"><div className="card form-card"><div className="section-head"><div><span className="section-kicker">{isMcp ? "GRAFANA PRODUCTION" : "AI PROVIDER"}</span><h2>{isMcp ? "Grafana MCP" : "分析模型"}</h2></div><span className="status-pill healthy">● {isMcp ? "演示模式" : "待配置"}</span></div>{isMcp ? <>
     <label>Grafana 地址<input value={form.grafanaUrl} onChange={e => field("grafanaUrl", e.target.value)} /></label><label>Service Account Token<input type="password" value={form.grafanaToken} onChange={e => field("grafanaToken", e.target.value)} placeholder="保存到系统安全存储" /></label><div className="form-pair"><label>MCP 命令<input value={form.mcpCommand} onChange={e => field("mcpCommand", e.target.value)} /></label><label>启动参数<input value={form.mcpArgs} onChange={e => field("mcpArgs", e.target.value)} /></label></div>
   </> : <><div className="form-pair"><label>Provider<select value={form.aiProvider} onChange={e => field("aiProvider", e.target.value)}><option>DeepSeek</option><option>Qwen</option><option>OpenAI</option><option>Custom OpenAI Compatible</option></select></label><label>模型<input value={form.aiModel} onChange={e => field("aiModel", e.target.value)} /></label></div><label>API Base URL<input value={form.aiBaseUrl} onChange={e => field("aiBaseUrl", e.target.value)} /></label><label>API Key<input type="password" value={form.aiKey} onChange={e => field("aiKey", e.target.value)} placeholder="保存到系统安全存储" /></label><div className="schedule"><div><b>自动生成日报</b><small>每天在指定时间运行分析</small></div><input type="time" value={form.scheduleTime} onChange={e => field("scheduleTime", e.target.value)} /><button className={`toggle ${form.scheduleEnabled ? "on" : ""}`} onClick={() => field("scheduleEnabled", !form.scheduleEnabled)}><i /></button></div></>}
-  <div className="form-actions">{isMcp && <button className="secondary" onClick={test} disabled={testing}>{testing ? "测试中…" : "测试连接"}</button>}<button className="primary" onClick={save}>保存设置</button><span className="form-message">{message}</span></div></div><aside className="card safety"><span>♢</span><h3>默认安全策略</h3><ul><li>mcp-grafana 使用 --disable-write</li><li>建议使用 Viewer 最小权限账号</li><li>Token 与 API Key 不写入 SQLite</li><li>AI 仅能分析并提供建议</li></ul></aside></div></>;
+  {isMcp && tools.length > 0 && <div className="tool-list"><b>已发现工具</b>{tools.slice(0, 8).map(tool => <span key={tool.name}><code>{tool.name}</code><small>{tool.description}</small></span>)}</div>}<div className="form-actions">{isMcp && <Button variant="default" onClick={test} loading={testing}>测试连接</Button>}<Button onClick={save}>保存设置</Button><span className="form-message">{message}</span></div></div><aside className="card safety"><span>♢</span><h3>默认安全策略</h3><ul><li>mcp-grafana 使用 --disable-write</li><li>建议使用 Viewer 最小权限账号</li><li>Token 与 API Key 不写入 SQLite</li><li>AI 仅能分析并提供建议</li></ul></aside></div></>;
 }
 
 export default function App() {

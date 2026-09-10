@@ -161,13 +161,20 @@ fn test_connection(settings: AppSettings) -> Result<String, String> {
     }
     let mut client = GrafanaMcpClient::connect(mcp_config(&settings))?;
     let tools = client.list_tools()?;
-    Ok(format!("已连接官方 mcp-grafana，共发现 {} 个只读工具", tools.len()))
+    Ok(format!(
+        "已连接官方 mcp-grafana，共发现 {} 个只读工具",
+        tools.len()
+    ))
 }
 
 fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
     GrafanaMcpConfig {
         command: settings.mcp_command.clone(),
-        args: settings.mcp_args.split_whitespace().map(str::to_owned).collect(),
+        args: settings
+            .mcp_args
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
         grafana_url: settings.grafana_url.clone(),
         service_account_token: settings.grafana_token.clone(),
     }
@@ -175,7 +182,11 @@ fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
 
 #[tauri::command]
 fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
-    if !settings.mcp_args.split_whitespace().any(|arg| arg == "--disable-write") {
+    if !settings
+        .mcp_args
+        .split_whitespace()
+        .any(|arg| arg == "--disable-write")
+    {
         return Err("安全检查失败：MVP 必须使用 --disable-write".into());
     }
     GrafanaMcpClient::connect(mcp_config(&settings))?.list_tools()
@@ -194,8 +205,8 @@ pub fn run() {
             generate_report,
             load_settings,
             save_settings,
-            test_connection
-            ,list_mcp_tools
+            test_connection,
+            list_mcp_tools
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Grafana Watch Dog");
