@@ -111,34 +111,6 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn demo_report() -> Value {
-    let now = Local::now();
-    let date = now.format("%Y-%m-%d").to_string();
-    json!({
-      "id": format!("report-{date}"), "date": date, "score": 87, "status": "warning",
-      "generatedAt": now.format("%Y-%m-%d %H:%M").to_string(),
-      "summary": "系统整体稳定，但数据库性能出现明显恶化趋势。慢查询增长显著高于业务流量增长，建议优先检查订单查询相关 SQL 与索引。",
-      "stats": { "critical": 2, "warning": 3, "healthy": 18, "alerts": 8 },
-      "services": [
-        { "name":"服务器", "kind":"Server", "score":92, "metrics":["CPU 52%","内存 71%","磁盘 53%"] },
-        { "name":"数据库", "kind":"MySQL", "score":81, "metrics":["QPS 1,240","慢查询 1,823","死锁 12"] },
-        { "name":"API", "kind":"FastAPI", "score":94, "metrics":["P95 1.82s","错误率 3.1%","QPS 684"] },
-        { "name":"日志", "kind":"Loki", "score":73, "metrics":["ERROR 128","Timeout 42","OOM 1"] }
-      ],
-      "trends": [
-        { "label":"CPU","value":52,"unit":"%","change":12,"history":[38,41,45,43,48,49,52] },
-        { "label":"Memory","value":71,"unit":"%","change":18,"history":[54,58,57,62,66,68,71] },
-        { "label":"QPS","value":1240,"unit":"","change":31,"history":[820,910,880,1010,1100,1180,1240] },
-        { "label":"API P95","value":1.82,"unit":"s","change":24,"history":[1.15,1.22,1.31,1.28,1.55,1.69,1.82] }
-      ],
-      "issues": [
-        { "id":"mysql-slow","severity":"critical","title":"MySQL 慢查询异常增长","source":"Prometheus · MySQL","change":"+188%","reason":"慢查询增长明显高于 QPS 的 39% 增长，疑似 SQL 性能退化，而非单纯业务流量增长。","recommendations":["检查 Top Slow SQL","检查 orders 表索引","检查连接池与锁等待"] },
-        { "id":"oom","severity":"critical","title":"FastAPI 发生 OOM","source":"Loki · 14:32","change":"1 次","reason":"OOM 前 15 分钟内存与 Swap 持续上涨，并伴随 API P95 延迟升高。","recommendations":["检查进程内存快照","核对当时请求峰值","检查最近发布变更"] },
-        { "id":"memory","severity":"warning","title":"orderslave 内存压力升高","source":"Prometheus · Node","change":"+18%","reason":"内存已达到 88%，过去 7 天持续上升。","recommendations":["确认缓存占用","检查异常进程"] }
-      ]
-    })
-}
-
 #[tauri::command]
 fn list_reports(db: State<'_, Database>) -> Result<Vec<Value>, String> {
     let conn = db.0.lock().map_err(|_| "数据库锁异常".to_string())?;
@@ -148,28 +120,15 @@ fn list_reports(db: State<'_, Database>) -> Result<Vec<Value>, String> {
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
-    let reports: Vec<Value> = rows
+    Ok(rows
         .filter_map(Result::ok)
         .filter_map(|s| serde_json::from_str(&s).ok())
-        .collect();
-    if reports.is_empty() {
-        Ok(vec![demo_report()])
-    } else {
-        Ok(reports)
-    }
+        .collect())
 }
 
 #[tauri::command]
-fn generate_report(db: State<'_, Database>) -> Result<Value, String> {
-    // This deterministic collector is the offline fallback. The Grafana MCP collector
-    // can replace it without changing the report schema or UI contract.
-    let report = demo_report();
-    let conn = db.0.lock().map_err(|_| "数据库锁异常".to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO reports (id,report_date,score,status,summary,report_json,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![report["id"].as_str(), report["date"].as_str(), report["score"].as_i64(), report["status"].as_str(), report["summary"].as_str(), report.to_string(), report["generatedAt"].as_str()]
-    ).map_err(|e| e.to_string())?;
-    Ok(report)
+fn generate_report() -> Result<Value, String> {
+    Err("真实日报采集器尚未接入；未生成任何占位数据".into())
 }
 
 #[tauri::command]
