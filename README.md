@@ -76,6 +76,16 @@ Grafana URL 与 Service Account Token 通过子进程环境变量 `GRAFANA_URL` 
 - 设置文件和 SQLite 都不会持久化 Token/API Key；当前版本关闭应用后需重新输入。生产接入应使用系统 Keychain。
 - 推荐 Grafana Service Account 仅授予所需 datasource 的查询权限。
 
+## 定时 MCP 监控与提醒
+
+在“系统设置”中填写 Prometheus 数据源 UID，配置检查间隔、重复提醒冷却时间和阈值，然后开启“MCP 定时监控”。应用运行期间会定时调用只读 `query_prometheus` 工具。
+
+- 默认包含 CPU、内存、磁盘剩余空间和服务器在线状态四条规则。
+- 支持连续多次超限后触发，避免瞬时毛刺；持续异常只在冷却期结束后重复提醒。
+- 指标恢复后会发送恢复提醒。状态和最近 100 条事件存储于 SQLite。
+- “立即检查”可验证数据源 UID、MCP 返回格式和全部规则。
+- Token 只保存在当前应用进程内，因此应用重启后需要重新输入。需要系统重启后无人值守监控时，应先接入系统 Keychain。
+
 ## 项目结构
 
 ```text
@@ -94,4 +104,4 @@ src-tauri/capabilities/          Tauri 最小权限声明
 1. 在现有 MCP `call_tool` 基础上实现 Report Collector，映射 `query_prometheus`、`query_loki_logs` 和 Alerting 工具。
 2. 增加 OpenAI-compatible Provider，使用 JSON Schema 校验结构化输出。
 3. 把凭据接入 Windows Credential Manager / macOS Keychain / Secret Service。
-4. 增加 Tokio 调度器、失败重试、查询审计与报告导出。
+4. 增加失败重试、查询审计、系统 Keychain 与报告导出。

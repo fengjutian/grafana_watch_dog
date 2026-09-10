@@ -42,8 +42,12 @@ struct AppSettings {
     alert_rules: Vec<AlertRule>,
 }
 
-fn default_monitor_interval() -> u64 { 5 }
-fn default_cooldown() -> i64 { 30 }
+fn default_monitor_interval() -> u64 {
+    5
+}
+fn default_cooldown() -> i64 {
+    30
+}
 fn default_alert_rules() -> Vec<AlertRule> {
     vec![
         AlertRule { id:"cpu".into(), name:"CPU 使用率".into(), expr:"100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)".into(), operator:Comparison::GreaterThan, threshold:85.0, for_checks:2, severity:"critical".into(), unit:"%".into() },
@@ -179,8 +183,15 @@ fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-fn save_settings(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>, settings: AppSettings) -> Result<(), String> {
-    *runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
+fn save_settings(
+    app: tauri::AppHandle,
+    runtime: State<'_, RuntimeSettings>,
+    settings: AppSettings,
+) -> Result<(), String> {
+    *runtime
+        .0
+        .lock()
+        .map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
     let mut settings = settings;
     // Secrets are deliberately excluded until an OS-keychain adapter is configured.
     settings.grafana_token.clear();
@@ -255,11 +266,18 @@ struct MonitorRunResult {
     completed_at: String,
 }
 
-fn execute_monitor(app: &tauri::AppHandle, settings: &AppSettings) -> Result<MonitorRunResult, String> {
+fn execute_monitor(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+) -> Result<MonitorRunResult, String> {
     if settings.prometheus_datasource_uid.trim().is_empty() {
         return Err("请先配置 Prometheus 数据源 UID".into());
     }
-    if !settings.mcp_args.split_whitespace().any(|arg| arg == "--disable-write") {
+    if !settings
+        .mcp_args
+        .split_whitespace()
+        .any(|arg| arg == "--disable-write")
+    {
         return Err("安全检查失败：监控必须使用 --disable-write".into());
     }
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
@@ -269,28 +287,51 @@ fn execute_monitor(app: &tauri::AppHandle, settings: &AppSettings) -> Result<Mon
     let mut errors = Vec::new();
 
     for rule in &settings.alert_rules {
-        let response = client.call_tool("query_prometheus", json!({
-            "datasourceUid": settings.prometheus_datasource_uid,
-            "expr": rule.expr,
-            "queryType": "instant",
-            "startTime": "now"
-        }));
+        let response = client.call_tool(
+            "query_prometheus",
+            json!({
+                "datasourceUid": settings.prometheus_datasource_uid,
+                "expr": rule.expr,
+                "queryType": "instant",
+                "startTime": "now"
+            }),
+        );
         let value = match response
             .and_then(|value| extract_metric_values(&value))
-            .and_then(|values| rule.operator.aggregate(values.into_iter()).ok_or_else(|| "查询结果为空".into()))
-        {
+            .and_then(|values| {
+                rule.operator
+                    .aggregate(values.into_iter())
+                    .ok_or_else(|| "查询结果为空".into())
+            }) {
             Ok(value) => value,
-            Err(error) => { errors.push(format!("{}：{}", rule.name, error)); continue; }
+            Err(error) => {
+                errors.push(format!("{}：{}", rule.name, error));
+                continue;
+            }
         };
-        let previous = conn.query_row(
-            "SELECT state_json FROM alert_states WHERE rule_id=?1", [&rule.id],
-            |row| row.get::<_, String>(0),
-        ).ok().and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
-        let (state, event) = evaluate(rule, value, previous, settings.alert_cooldown_minutes.max(0), now);
+        let previous = conn
+            .query_row(
+                "SELECT state_json FROM alert_states WHERE rule_id=?1",
+                [&rule.id],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
+        let (state, event) = evaluate(
+            rule,
+            value,
+            previous,
+            settings.alert_cooldown_minutes.max(0),
+            now,
+        );
         conn.execute(
             "INSERT OR REPLACE INTO alert_states(rule_id,state_json) VALUES (?1,?2)",
-            params![rule.id, serde_json::to_string(&state).map_err(|e| e.to_string())?],
-        ).map_err(|e| e.to_string())?;
+            params![
+                rule.id,
+                serde_json::to_string(&state).map_err(|e| e.to_string())?
+            ],
+        )
+        .map_err(|e| e.to_string())?;
         if let Some(event) = event {
             let raw = serde_json::to_string(&event).map_err(|e| e.to_string())?;
             conn.execute(
@@ -301,21 +342,40 @@ fn execute_monitor(app: &tauri::AppHandle, settings: &AppSettings) -> Result<Mon
             events.push(event);
         }
     }
-    Ok(MonitorRunResult { checked: settings.alert_rules.len(), events, errors, completed_at: now.to_rfc3339() })
+    Ok(MonitorRunResult {
+        checked: settings.alert_rules.len(),
+        events,
+        errors,
+        completed_at: now.to_rfc3339(),
+    })
 }
 
 #[tauri::command]
-fn run_monitor_now(app: tauri::AppHandle, runtime: State<'_, RuntimeSettings>, settings: AppSettings) -> Result<MonitorRunResult, String> {
-    *runtime.0.lock().map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
+fn run_monitor_now(
+    app: tauri::AppHandle,
+    runtime: State<'_, RuntimeSettings>,
+    settings: AppSettings,
+) -> Result<MonitorRunResult, String> {
+    *runtime
+        .0
+        .lock()
+        .map_err(|_| "运行时设置锁异常".to_string())? = settings.clone();
     execute_monitor(&app, &settings)
 }
 
 #[tauri::command]
 fn list_alert_events(app: tauri::AppHandle) -> Result<Vec<AlertEvent>, String> {
     let conn = Connection::open(db_path(&app)?).map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT event_json FROM alert_events ORDER BY created_at DESC LIMIT 100").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(Result::ok).filter_map(|raw| serde_json::from_str(&raw).ok()).collect())
+    let mut stmt = conn
+        .prepare("SELECT event_json FROM alert_events ORDER BY created_at DESC LIMIT 100")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .filter_map(Result::ok)
+        .filter_map(|raw| serde_json::from_str(&raw).ok())
+        .collect())
 }
 
 fn start_monitor_scheduler(app: tauri::AppHandle) {
@@ -325,11 +385,17 @@ fn start_monitor_scheduler(app: tauri::AppHandle) {
             thread::sleep(Duration::from_secs(30));
             elapsed_seconds = elapsed_seconds.saturating_add(30);
             let settings = match app.state::<RuntimeSettings>().0.lock() {
-                Ok(settings) => settings.clone(), Err(_) => continue,
+                Ok(settings) => settings.clone(),
+                Err(_) => continue,
             };
-            if !settings.monitor_enabled { elapsed_seconds = 0; continue; }
+            if !settings.monitor_enabled {
+                elapsed_seconds = 0;
+                continue;
+            }
             let interval = settings.monitor_interval_minutes.max(1).saturating_mul(60);
-            if elapsed_seconds < interval { continue; }
+            if elapsed_seconds < interval {
+                continue;
+            }
             elapsed_seconds = 0;
             if let Err(error) = execute_monitor(&app, &settings) {
                 let _ = app.emit("monitor-error", error);
