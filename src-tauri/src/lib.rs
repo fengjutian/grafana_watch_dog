@@ -93,6 +93,16 @@ impl Default for AppSettings {
     }
 }
 
+fn hydrate_credentials(mut settings: AppSettings) -> AppSettings {
+    if settings.grafana_token.is_empty() {
+        settings.grafana_token = credentials::load_grafana_token();
+    }
+    if settings.ai_key.is_empty() {
+        settings.ai_key = credentials::load_ai_key();
+    }
+    settings
+}
+
 fn db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -149,16 +159,11 @@ fn generate_report() -> Result<Value, String> {
 fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app)?;
     if !path.exists() {
-        let mut settings = AppSettings::default();
-        settings.grafana_token = credentials::load_grafana_token();
-        settings.ai_key = credentials::load_ai_key();
-        return Ok(settings);
+        return Ok(hydrate_credentials(AppSettings::default()));
     }
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut settings: AppSettings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    settings.grafana_token = credentials::load_grafana_token();
-    settings.ai_key = credentials::load_ai_key();
-    Ok(settings)
+    let settings: AppSettings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(hydrate_credentials(settings))
 }
 
 #[tauri::command]
@@ -167,6 +172,7 @@ fn save_settings(
     runtime: State<'_, RuntimeSettings>,
     settings: AppSettings,
 ) -> Result<(), String> {
+    let settings = hydrate_credentials(settings);
     credentials::save(&settings.grafana_token, &settings.ai_key)?;
     *runtime
         .0
@@ -182,6 +188,7 @@ fn save_settings(
 
 #[tauri::command]
 fn test_connection(settings: AppSettings) -> Result<String, String> {
+    let settings = hydrate_credentials(settings);
     if settings.grafana_url.trim().is_empty() {
         return Err("请填写 Grafana 地址".into());
     }
@@ -255,6 +262,7 @@ struct ConnectionDiagnostic {
 
 #[tauri::command]
 fn diagnose_connection(settings: AppSettings) -> ConnectionDiagnostic {
+    let settings = hydrate_credentials(settings);
     let mut steps = Vec::new();
     let started = Instant::now();
     let config_error = if settings.grafana_url.trim().is_empty() {
@@ -377,6 +385,7 @@ fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
 
 #[tauri::command]
 fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
+    let settings = hydrate_credentials(settings);
     if !settings
         .mcp_args
         .split_whitespace()
@@ -389,6 +398,7 @@ fn list_mcp_tools(settings: AppSettings) -> Result<Vec<ToolSummary>, String> {
 
 #[tauri::command]
 fn call_mcp_tool(settings: AppSettings, name: String, arguments: Value) -> Result<Value, String> {
+    let settings = hydrate_credentials(settings);
     if !settings
         .mcp_args
         .split_whitespace()
@@ -502,6 +512,7 @@ fn run_monitor_now(
     runtime: State<'_, RuntimeSettings>,
     settings: AppSettings,
 ) -> Result<MonitorRunResult, String> {
+    let settings = hydrate_credentials(settings);
     *runtime
         .0
         .lock()
@@ -530,6 +541,7 @@ fn analyze_alerts(
     settings: AppSettings,
     question: String,
 ) -> Result<String, String> {
+    let settings = hydrate_credentials(settings);
     if question.trim().is_empty() {
         return Err("请输入需要分析的问题".into());
     }
