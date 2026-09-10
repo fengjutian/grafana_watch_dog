@@ -1,0 +1,28 @@
+import { invoke } from "@tauri-apps/api/core";
+import { currentReport, defaultSettings, reportHistory } from "./data";
+import type { AppSettings, Report } from "./types";
+
+const isTauri = () => "__TAURI_INTERNALS__" in window;
+const pause = (ms = 450) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function listReports(): Promise<Report[]> {
+  if (isTauri()) return invoke("list_reports");
+  return reportHistory;
+}
+export async function generateReport(): Promise<Report> {
+  if (isTauri()) return invoke("generate_report");
+  await pause(1100); return { ...currentReport, generatedAt: new Date().toLocaleString("zh-CN") };
+}
+export async function loadSettings(): Promise<AppSettings> {
+  if (isTauri()) return invoke("load_settings");
+  const saved = localStorage.getItem("ai-ops-settings");
+  return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings;
+}
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  if (isTauri()) return invoke("save_settings", { settings });
+  localStorage.setItem("ai-ops-settings", JSON.stringify({ ...settings, grafanaToken: "", aiKey: "" }));
+}
+export async function testConnection(settings: AppSettings): Promise<string> {
+  if (isTauri()) return invoke("test_mcp_connection", { settings });
+  await pause(); return settings.grafanaUrl ? "Grafana MCP 连接成功（演示模式）" : Promise.reject(new Error("请填写 Grafana 地址"));
+}
