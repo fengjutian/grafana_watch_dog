@@ -374,6 +374,13 @@ fn collect_dashboards(value: &Value, output: &mut Vec<GrafanaDashboard>) {
 fn discover_grafana(settings: AppSettings) -> Result<GrafanaDiscovery, String> {
     let settings = hydrate_credentials(settings);
     let mut client = connect_with_retry(&settings)?;
+    discover_resources(&mut client, &settings)
+}
+
+fn discover_resources(
+    client: &mut GrafanaMcpClient,
+    settings: &AppSettings,
+) -> Result<GrafanaDiscovery, String> {
     let datasource_result = call_tool_with_retry(
         &mut client,
         &settings,
@@ -390,10 +397,7 @@ fn discover_grafana(settings: AppSettings) -> Result<GrafanaDiscovery, String> {
     let mut dashboards = Vec::new();
     collect_datasources(&mcp_payload(&datasource_result), &mut datasources);
     collect_dashboards(&mcp_payload(&dashboard_result), &mut dashboards);
-    Ok(GrafanaDiscovery {
-        datasources,
-        dashboards,
-    })
+    Ok(GrafanaDiscovery { datasources, dashboards })
 }
 
 #[tauri::command]
@@ -567,8 +571,8 @@ fn execute_monitor(
     app: &tauri::AppHandle,
     settings: &AppSettings,
 ) -> Result<MonitorRunResult, String> {
-    if settings.prometheus_datasource_uid.trim().is_empty() {
-        return Err("请先配置 Prometheus 数据源 UID".into());
+    if settings.selected_datasource_uids.is_empty() && settings.selected_dashboard_uids.is_empty() {
+        return Err("请先从 Grafana 自动发现结果中选择需要监控的数据源或 Dashboard".into());
     }
     if !settings
         .mcp_args
@@ -579,31 +583,29 @@ fn execute_monitor(
     }
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     let mut client = connect_with_retry(settings)?;
+    let discovery = discover_resources(&mut client, settings)?;
+    let prometheus_uids: Vec<String> = discovery.datasources.iter()
+        .filter(|source| settings.selected_datasource_uids.contains(&source.uid)
+            && source.kind.to_ascii_lowercase().contains("prometheus"))
+        .map(|source| source.uid.clone()).collect();
     let now = Local::now();
     let mut events = Vec::new();
     let mut errors = Vec::new();
     let mut readings = Vec::new();
 
     for rule in &settings.alert_rules {
-        let response = call_tool_with_retry(
-            &mut client,
-            settings,
-            "query_prometheus",
-            json!({
-                "datasourceUid": settings.prometheus_datasource_uid,
-                "expr": rule.expr,
-                "queryType": "instant",
-                "startTime": "now",
-                "endTime": "now"
-            }),
-        );
-        let value = match response
-            .and_then(|value| extract_metric_values(&value))
-            .and_then(|values| {
-                rule.operator
-                    .aggregate(values.into_iter())
-                    .ok_or_else(|| "查询结果为空".into())
-            }) {
+        let mut values = Vec::new();
+        for datasource_uid in &prometheus_uids {
+            match call_tool_with_retry(&mut client, settings, "query_prometheus", json!({
+                "datasourceUid": datasource_uid, "expr": rule.expr, "queryType": "instant",
+                "startTime": "now", "endTime": "now"
+            })).and_then(|value| extract_metric_values(&value)) {
+                Ok(mut found) => values.append(&mut found),
+                Err(error) => errors.push(format!("{} / {}：{}", rule.name, datasource_uid, error)),
+            }
+        }
+        let value = match rule.operator.aggregate(values.into_iter())
+            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string()) {
             Ok(value) => value,
             Err(error) => {
                 errors.push(format!("{}：{}", rule.name, error));
@@ -649,6 +651,24 @@ fn execute_monitor(
             ).map_err(|e| e.to_string())?;
             let _ = app.emit("monitor-alert", &event);
             events.push(event);
+        }
+    }
+    let collected_at = now.to_rfc3339();
+    match call_tool_with_retry(&mut client, settings, "alerting_manage_rules",
+        json!({"operation":"list", "rule_limit":200, "limit_alerts":20})) {
+        Ok(alerts) => {
+            conn.execute("INSERT INTO grafana_snapshots(kind,resource_uid,payload_json,collected_at) VALUES ('alerts','grafana',?1,?2)",
+                params![mcp_payload(&alerts).to_string(), collected_at]).map_err(|e| e.to_string())?;
+        }
+        Err(error) => errors.push(format!("Grafana 告警：{}", error)),
+    }
+    for dashboard_uid in &settings.selected_dashboard_uids {
+        match call_tool_with_retry(&mut client, settings, "get_dashboard_panel_queries", json!({"uid":dashboard_uid})) {
+            Ok(panels) => {
+                conn.execute("INSERT INTO grafana_snapshots(kind,resource_uid,payload_json,collected_at) VALUES ('dashboard_panels',?1,?2,?3)",
+                    params![dashboard_uid, mcp_payload(&panels).to_string(), collected_at]).map_err(|e| e.to_string())?;
+            }
+            Err(error) => errors.push(format!("Dashboard {}：{}", dashboard_uid, error)),
         }
     }
     Ok(MonitorRunResult {
@@ -965,6 +985,7 @@ pub fn run() {
             save_settings,
             test_connection,
             diagnose_connection,
+            discover_grafana,
             list_mcp_tools,
             call_mcp_tool,
             run_monitor_now,

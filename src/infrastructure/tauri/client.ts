@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings } from "../../domain/settings/defaults";
-import type { AlertEvent, AppSettings, ConnectionDiagnostic, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -29,6 +29,11 @@ export async function testConnection(settings: AppSettings): Promise<string> {
 export async function diagnoseConnection(settings: AppSettings): Promise<ConnectionDiagnostic> {
   if (!isTauri()) throw new Error("连接诊断仅支持 Tauri 桌面运行环境");
   return invoke("diagnose_connection", { settings });
+}
+
+export async function discoverGrafana(settings: AppSettings): Promise<GrafanaDiscovery> {
+  if (!isTauri()) throw new Error("Grafana 资源发现仅支持 Tauri 桌面运行环境");
+  return invoke("discover_grafana", { settings });
 }
 
 export async function listMcpTools(settings: AppSettings): Promise<McpTool[]> {
