@@ -2,6 +2,13 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricSample {
+    pub value: f64,
+    pub instance: String,
+    pub job: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlertRule {
@@ -154,6 +161,13 @@ fn make_event(rule: &AlertRule, value: f64, kind: &str, now: &DateTime<Local>) -
 /// Extract the largest numeric sample from an MCP tool result. mcp-grafana wraps
 /// Prometheus JSON in MCP `content[].text`; direct Prometheus JSON is accepted too.
 pub fn extract_metric_values(value: &Value) -> Result<Vec<f64>, String> {
+    Ok(extract_metric_samples(value)?
+        .into_iter()
+        .map(|sample| sample.value)
+        .collect())
+}
+
+pub fn extract_metric_samples(value: &Value) -> Result<Vec<MetricSample>, String> {
     let decoded = value
         .get("content")
         .and_then(Value::as_array)
@@ -164,12 +178,34 @@ pub fn extract_metric_values(value: &Value) -> Result<Vec<f64>, String> {
         })
         .and_then(|text| serde_json::from_str::<Value>(text).ok());
     let root = decoded.as_ref().unwrap_or(value);
-    let mut numbers = Vec::new();
-    collect_samples(root, &mut numbers);
-    if numbers.is_empty() {
+    let mut samples = Vec::new();
+    collect_labeled_samples(root, &mut samples);
+    if samples.is_empty() {
         Err("MCP 查询结果中没有数值样本".into())
     } else {
-        Ok(numbers)
+        Ok(samples)
+    }
+}
+
+fn collect_labeled_samples(value: &Value, output: &mut Vec<MetricSample>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(number) = map.get("value").and_then(Value::as_array)
+                .and_then(|value| value.get(1)).and_then(json_number) {
+                let labels = map.get("metric").and_then(Value::as_object);
+                let instance = labels.and_then(|labels| labels.get("instance"))
+                    .and_then(Value::as_str).unwrap_or("未知实例").to_string();
+                let job = labels.and_then(|labels| labels.get("job"))
+                    .and_then(Value::as_str).unwrap_or("").to_string();
+                output.push(MetricSample { value: number, instance, job });
+                return;
+            }
+            for child in map.values() { collect_labeled_samples(child, output); }
+        }
+        Value::Array(items) => {
+            for item in items { collect_labeled_samples(item, output); }
+        }
+        _ => {}
     }
 }
 
