@@ -18,7 +18,10 @@ mod monitor;
 use mcp::{
     install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
 };
-use monitor::{evaluate, extract_metric_samples, extract_metric_values, AlertEvent, AlertRule, AlertState, Comparison, MetricSample};
+use monitor::{
+    evaluate, extract_metric_samples, AlertEvent, AlertRule, AlertState,
+    Comparison, MetricSample,
+};
 
 struct Database(Mutex<Connection>);
 struct RuntimeSettings(Mutex<AppSettings>);
@@ -618,15 +621,28 @@ fn execute_monitor(
             )
             .and_then(|value| extract_metric_samples(&value))
             {
-                Ok(found) => samples.extend(found.into_iter().map(|sample| (sample, datasource_uid.clone()))),
+                Ok(found) => samples.extend(
+                    found
+                        .into_iter()
+                        .map(|sample| (sample, datasource_uid.clone())),
+                ),
                 Err(error) => errors.push(format!("{} / {}：{}", rule.name, datasource_uid, error)),
             }
         }
         let selected = samples.into_iter().reduce(|current, candidate| {
-            let chosen = rule.operator.aggregate([current.0.value, candidate.0.value].into_iter()).unwrap_or(current.0.value);
-            if (chosen - candidate.0.value).abs() < f64::EPSILON { candidate } else { current }
+            let chosen = rule
+                .operator
+                .aggregate([current.0.value, candidate.0.value].into_iter())
+                .unwrap_or(current.0.value);
+            if (chosen - candidate.0.value).abs() < f64::EPSILON {
+                candidate
+            } else {
+                current
+            }
         });
-        let (sample, datasource_uid) = match selected.ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string()) {
+        let (sample, datasource_uid) = match selected
+            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string())
+        {
             Ok(sample) => sample,
             Err(error) => {
                 errors.push(format!("{}：{}", rule.name, error));

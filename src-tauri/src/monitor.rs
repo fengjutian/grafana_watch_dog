@@ -160,6 +160,7 @@ fn make_event(rule: &AlertRule, value: f64, kind: &str, now: &DateTime<Local>) -
 
 /// Extract the largest numeric sample from an MCP tool result. mcp-grafana wraps
 /// Prometheus JSON in MCP `content[].text`; direct Prometheus JSON is accepted too.
+#[cfg(test)]
 pub fn extract_metric_values(value: &Value) -> Result<Vec<f64>, String> {
     Ok(extract_metric_samples(value)?
         .into_iter()
@@ -190,55 +191,37 @@ pub fn extract_metric_samples(value: &Value) -> Result<Vec<MetricSample>, String
 fn collect_labeled_samples(value: &Value, output: &mut Vec<MetricSample>) {
     match value {
         Value::Object(map) => {
-            if let Some(number) = map.get("value").and_then(Value::as_array)
-                .and_then(|value| value.get(1)).and_then(json_number) {
-                let labels = map.get("metric").and_then(Value::as_object);
-                let instance = labels.and_then(|labels| labels.get("instance"))
-                    .and_then(Value::as_str).unwrap_or("未知实例").to_string();
-                let job = labels.and_then(|labels| labels.get("job"))
-                    .and_then(Value::as_str).unwrap_or("").to_string();
-                output.push(MetricSample { value: number, instance, job });
-                return;
-            }
-            for child in map.values() { collect_labeled_samples(child, output); }
-        }
-        Value::Array(items) => {
-            for item in items { collect_labeled_samples(item, output); }
-        }
-        _ => {}
-    }
-}
-
-fn collect_samples(value: &Value, output: &mut Vec<f64>) {
-    match value {
-        Value::Object(map) => {
-            if let Some(sample) = map
+            if let Some(number) = map
                 .get("value")
                 .and_then(Value::as_array)
-                .and_then(|v| v.get(1))
+                .and_then(|value| value.get(1))
+                .and_then(json_number)
             {
-                if let Some(number) = json_number(sample) {
-                    output.push(number);
-                }
-            }
-            if let Some(samples) = map.get("values").and_then(Value::as_array) {
-                for sample in samples {
-                    if let Some(number) = sample
-                        .as_array()
-                        .and_then(|v| v.get(1))
-                        .and_then(json_number)
-                    {
-                        output.push(number);
-                    }
-                }
+                let labels = map.get("metric").and_then(Value::as_object);
+                let instance = labels
+                    .and_then(|labels| labels.get("instance"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("未知实例")
+                    .to_string();
+                let job = labels
+                    .and_then(|labels| labels.get("job"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                output.push(MetricSample {
+                    value: number,
+                    instance,
+                    job,
+                });
+                return;
             }
             for child in map.values() {
-                collect_samples(child, output);
+                collect_labeled_samples(child, output);
             }
         }
         Value::Array(items) => {
             for item in items {
-                collect_samples(item, output);
+                collect_labeled_samples(item, output);
             }
         }
         _ => {}
