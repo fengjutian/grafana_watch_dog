@@ -863,7 +863,7 @@ fn generate_and_store_report(
         } else {
             ((reading.value - first) / first * 100.0).round()
         };
-        trends.push(json!({ "label":reading.rule.name, "value":reading.value, "unit":reading.rule.unit, "change":change, "history":history }));
+        trends.push(json!({ "label":reading.rule.name, "value":reading.value, "unit":reading.rule.unit, "change":change, "history":history, "datasourceUid":reading.datasource_uid, "instance":reading.instance, "category":category }));
 
         if breached {
             issues.push(json!({

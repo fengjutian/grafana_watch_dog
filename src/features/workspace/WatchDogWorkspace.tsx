@@ -42,14 +42,6 @@ function Sparkline({ data }: { data: number[] }) {
   return <svg className="spark" viewBox="0 0 120 44" aria-label="最近采集趋势"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" /><circle cx="120" cy={38 - ((values.at(-1)! - min) / range) * 30} r="3.5" fill="currentColor" /></svg>;
 }
 
-function HealthGauge({ score, compact = false }: { score: number; compact?: boolean }) {
-  const r = compact ? 45 : 70, c = Math.PI * r, progress = c * score / 100;
-  return <div className={`gauge ${compact ? "compact" : ""}`}>
-    <svg viewBox="0 0 180 105"><path d={`M ${90-r} 90 A ${r} ${r} 0 0 1 ${90+r} 90`} className="gauge-track" pathLength={c} /><path d={`M ${90-r} 90 A ${r} ${r} 0 0 1 ${90+r} 90`} className={`gauge-fill ${scoreTone(score)}`} strokeDasharray={`${progress} ${c}`} pathLength={c} /></svg>
-    <div className="gauge-value"><strong>{score}</strong><span>/ 100</span></div>
-  </div>;
-}
-
 function IssueCard({ issue }: { issue: Issue }) {
   return <article className={`issue ${issue.severity}`}>
     <div className="issue-icon">{issue.severity === "critical" ? "!" : "↑"}</div>
@@ -82,16 +74,33 @@ function ServerOverview({ services }: { services: Report["services"] }) {
   })}</div>;
 }
 
+function MetricPanel({ category, services, report }: { category: "cpu" | "memory" | "disk"; services: Report["services"]; report: Report }) {
+  const metrics = services.filter(service => service.category === category);
+  const values = metrics.flatMap(metric => [metric.minimum, metric.average, metric.maximum].filter((value): value is number => typeof value === "number"));
+  const history = report.trends.filter(trend => metrics.some(metric => trend.label === metric.name && (trend.datasourceUid ?? metric.datasourceUid) === metric.datasourceUid)).flatMap(trend => trend.history);
+  const current = metrics.length ? metrics.reduce((sum, metric) => sum + (metric.average ?? metric.value ?? 0), 0) / metrics.length : 0;
+  return <article className="card grafana-panel"><div className="panel-title"><b>{metricMeta[category].label}</b><small>{metrics.length} 个实例</small></div><div className="panel-chart"><Sparkline data={history.length ? history : [0, 0]} /></div><div className="panel-legend"><span><i className="blue-dot" />平均 <b>{current.toFixed(2)}%</b></span><span>最低 <b>{values.length ? Math.min(...values).toFixed(2) : "—"}</b></span><span>最高 <b>{values.length ? Math.max(...values).toFixed(2) : "—"}</b></span></div></article>;
+}
+
 function Dashboard({ report, onGenerate, generating }: { report: Report; onGenerate: () => void; generating: boolean }) {
+  const datasourceOptions = [...new Set(report.services.map(service => service.datasourceUid ?? "legacy"))].sort();
+  const [datasource, setDatasource] = useState(datasourceOptions[0] ?? "legacy");
+  const [job, setJob] = useState("all"); const [instance, setInstance] = useState("all");
+  useEffect(() => { if (!datasourceOptions.includes(datasource)) setDatasource(datasourceOptions[0] ?? "legacy"); }, [report.id]);
+  const sourceServices = report.services.filter(service => (service.datasourceUid ?? "legacy") === datasource);
+  const jobs = [...new Set(sourceServices.map(service => service.job).filter(Boolean) as string[])].sort();
+  const instances = [...new Set(sourceServices.map(service => service.instance).filter(Boolean) as string[])].sort();
+  const filtered = sourceServices.filter(service => (job === "all" || service.job === job) && (instance === "all" || service.instance === instance));
+  const filteredIssues = report.issues.filter(issue => issue.source.includes(datasource) || datasource === "legacy");
+  const sourceScore = filtered.length ? Math.round(filtered.reduce((sum, service) => sum + service.score, 0) / filtered.length) : 0;
+  const sourceStatus: Status = filtered.some(service => service.breached && service.score < 50) ? "critical" : filtered.some(service => service.breached) ? "warning" : "healthy";
   return <>
-    <div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW · {report.date}{report.analysisNumber ? ` · 第 ${report.analysisNumber} 次分析` : ""}</p><h1>早上好，系统值得你关注一下。</h1><p>{report.windowStart ? `分析窗口：${report.windowStart} 至 ${report.windowEnd}，共 ${report.sampleCount ?? 0} 条采样。` : "该历史日报使用旧版快照采集方式。"}</p></div><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div>
-    <section className="hero-grid">
-      <div className="card health-card"><div className="section-head"><div><span className="section-kicker">SYSTEM HEALTH</span><h2>系统健康度</h2></div><span className={`status-pill ${report.status}`}>● {statusLabel(report.status)}</span></div><HealthGauge score={report.score} /></div>
-      <div className="card conclusion"><div className="conclusion-top"><span className="ai-mark"><IconSparkles size={20} /></span><div><span className="section-kicker">AI CONCLUSION</span><h2>今日结论</h2></div></div><blockquote>{report.summary}</blockquote><div className="stat-row"><div><b className="red-text">{report.stats.critical}</b><span>严重问题</span></div><div><b className="amber-text">{report.stats.warning}</b><span>需要关注</span></div><div><b className="green-text">{report.stats.healthy}</b><span>正常指标</span></div><div><b>{report.stats.alerts}</b><span>昨日告警</span></div></div></div>
-    </section>
-    <section><div className="section-title"><div><p className="eyebrow">SERVER INVENTORY</p><h2>按服务器运行详情</h2></div><span>{new Set(report.services.map(s => serverKey(s.instance))).size} 台服务器 · 数据更新于 {report.generatedAt.split(" ").at(-1)}</span></div><ServerOverview services={report.services} /></section>
-    <section><div className="section-title"><div><p className="eyebrow">RECENT SIGNAL</p><h2>关键趋势</h2></div><span>最近 7 次真实采集</span></div><div className="trend-grid">{report.trends.map((t) => <div className="card trend-card" key={t.label}><div><span>{t.label}</span><strong>{t.value.toLocaleString()}{t.unit}</strong><small className={Math.abs(t.change) > 20 ? "red-text" : "amber-text"}>{t.change >= 0 ? "↑" : "↓"} {Math.abs(t.change)}%</small></div><Sparkline data={t.history} /></div>)}</div></section>
-    <section><div className="section-title"><div><p className="eyebrow">PRIORITY QUEUE</p><h2>优先处理</h2></div><span>{report.issues.length} 项分析结果</span></div><div className="issues">{report.issues.map((i) => <IssueCard issue={i} key={i.id} />)}</div></section>
+    <div className="grafana-heading"><div><p className="eyebrow">INFRASTRUCTURE / DAILY OVERVIEW</p><h1>服务器运行总览</h1><p>{report.windowStart ? `${report.windowStart} — ${report.windowEnd} · ${report.sampleCount ?? 0} 条采样 · 第 ${report.analysisNumber ?? 1} 次分析` : "历史快照报告"}</p></div><div><span className={`status-pill ${sourceStatus}`}>● 当前数据源健康度 {sourceScore}</span><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div></div>
+    <div className="dashboard-filters"><label><span>数据源</span><select value={datasource} onChange={event => { setDatasource(event.target.value); setJob("all"); setInstance("all"); }}>{datasourceOptions.map(uid => <option key={uid}>{uid}</option>)}</select></label><label><span>Job</span><select value={job} onChange={event => setJob(event.target.value)}><option value="all">全部</option>{jobs.map(value => <option key={value}>{value}</option>)}</select></label><label><span>实例</span><select value={instance} onChange={event => setInstance(event.target.value)}><option value="all">全部</option>{instances.map(value => <option key={value}>{value}</option>)}</select></label><label><span>分析窗口</span><select disabled><option>过去 24 小时</option></select></label><div className="source-lock">● 当前仅展示数据源 <b>{datasource}</b></div></div>
+    <section className="overview-panels"><MetricPanel category="cpu" services={filtered} report={report} /><MetricPanel category="memory" services={filtered} report={report} /><MetricPanel category="disk" services={filtered} report={report} /></section>
+    <section><div className="resource-bar"><b>Resource Details · {datasource}</b><span>{new Set(filtered.map(service => service.instance)).size} 个实例</span></div>{filtered.length ? <ServerOverview services={filtered} /> : <EmptyState title="当前筛选无数据" detail="请切换数据源、Job 或实例。" />}</section>
+    <section className="source-summary card"><div><IconSparkles size={18} /><span><b>当前数据源分析</b><small>{datasource}</small></span></div><p>当前筛选共 {filtered.length} 项指标，{filtered.filter(s => s.breached).length ? `其中 ${filtered.filter(s => s.breached).length} 项超过阈值。` : "暂未发现超过阈值的指标。"}</p><div><span><b className="red-text">{filtered.filter(s => s.breached).length}</b>异常</span><span><b>{filtered.length}</b>指标</span></div></section>
+    <section><div className="section-title"><div><p className="eyebrow">PRIORITY QUEUE</p><h2>优先处理 · {datasource}</h2></div><span>{filteredIssues.length} 项分析结果</span></div><div className="issues">{filteredIssues.map((i) => <IssueCard issue={i} key={i.id} />)}</div></section>
   </>;
 }
 
