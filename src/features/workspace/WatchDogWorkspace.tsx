@@ -57,6 +57,31 @@ function IssueCard({ issue }: { issue: Issue }) {
   </article>;
 }
 
+const metricMeta = {
+  cpu: { label: "CPU 使用率", icon: "CPU" }, memory: { label: "内存使用率", icon: "MEM" },
+  disk: { label: "磁盘剩余空间", icon: "DSK" }, database: { label: "数据库状态", icon: "DB" },
+} as const;
+
+function serverKey(instance = "") { return instance.replace(/^https?:\/\//, "").split(":")[0] || "未知服务器"; }
+
+function ServerOverview({ services }: { services: Report["services"] }) {
+  const grouped = new Map<string, typeof services>();
+  services.forEach(service => {
+    const key = serverKey(service.instance ?? service.name.split(" · ").at(-1));
+    grouped.set(key, [...(grouped.get(key) ?? []), service]);
+  });
+  return <div className="server-list">{[...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([server, metrics]) => {
+    const available = metrics.find(metric => metric.category === "availability");
+    return <article className="card server-card" key={server}>
+      <div className="server-head"><div><span className="server-avatar">{server.slice(0, 2).toUpperCase()}</span><span><h3>{server}</h3><small>{metrics[0]?.datasourceUid ? `Prometheus · ${metrics[0].datasourceUid}` : "Prometheus 监控实例"}</small></span></div><i className={`status-pill ${available?.breached ? "critical" : "healthy"}`}>● {available?.breached ? "离线" : "在线"}</i></div>
+      <div className="server-metrics">{(["cpu", "memory", "disk", "database"] as const).map(category => {
+        const metric = metrics.find(item => item.category === category); const meta = metricMeta[category];
+        return <div className={`server-metric ${metric?.breached ? "bad" : ""}`} key={category}><div><b>{meta.icon}</b><span>{meta.label}</span></div>{metric ? <><strong>{metric.value?.toLocaleString(undefined, { maximumFractionDigits: 2 })}{metric.unit}</strong><small>{category === "database" ? (metric.value === 1 ? "运行正常" : "连接异常") : `阈值 ${metric.threshold}${metric.unit ?? ""}`}</small></> : <><strong className="muted-value">—</strong><small>未采集到该指标</small></>}</div>;
+      })}</div>
+    </article>;
+  })}</div>;
+}
+
 function Dashboard({ report, onGenerate, generating }: { report: Report; onGenerate: () => void; generating: boolean }) {
   return <>
     <div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW · {report.date}</p><h1>早上好，系统值得你关注一下。</h1><p>过去 24 小时的核心运行状态已经整理完毕。</p></div><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div>
@@ -64,7 +89,7 @@ function Dashboard({ report, onGenerate, generating }: { report: Report; onGener
       <div className="card health-card"><div className="section-head"><div><span className="section-kicker">SYSTEM HEALTH</span><h2>系统健康度</h2></div><span className={`status-pill ${report.status}`}>● {statusLabel(report.status)}</span></div><HealthGauge score={report.score} /></div>
       <div className="card conclusion"><div className="conclusion-top"><span className="ai-mark"><IconSparkles size={20} /></span><div><span className="section-kicker">AI CONCLUSION</span><h2>今日结论</h2></div></div><blockquote>{report.summary}</blockquote><div className="stat-row"><div><b className="red-text">{report.stats.critical}</b><span>严重问题</span></div><div><b className="amber-text">{report.stats.warning}</b><span>需要关注</span></div><div><b className="green-text">{report.stats.healthy}</b><span>正常指标</span></div><div><b>{report.stats.alerts}</b><span>昨日告警</span></div></div></div>
     </section>
-    <section><div className="section-title"><div><p className="eyebrow">SERVICE PULSE</p><h2>服务状态</h2></div><span>数据更新于 {report.generatedAt.split(" ").at(-1)}</span></div><div className="service-grid">{report.services.map((s) => <div className="card service-card" key={s.name}><div className="service-top"><div className={`service-icon ${scoreTone(s.score)}`}>{s.kind.slice(0, 1)}</div><div><h3>{s.name}</h3><small>{s.kind}</small></div><b className={scoreTone(s.score)}>{s.score}</b></div><div className="meter"><i style={{ width: `${s.score}%` }} className={scoreTone(s.score)} /></div><div className="metric-chips">{s.metrics.map((m) => <span key={m}>{m}</span>)}</div></div>)}</div></section>
+    <section><div className="section-title"><div><p className="eyebrow">SERVER INVENTORY</p><h2>按服务器运行详情</h2></div><span>{new Set(report.services.map(s => serverKey(s.instance))).size} 台服务器 · 数据更新于 {report.generatedAt.split(" ").at(-1)}</span></div><ServerOverview services={report.services} /></section>
     <section><div className="section-title"><div><p className="eyebrow">RECENT SIGNAL</p><h2>关键趋势</h2></div><span>最近 7 次真实采集</span></div><div className="trend-grid">{report.trends.map((t) => <div className="card trend-card" key={t.label}><div><span>{t.label}</span><strong>{t.value.toLocaleString()}{t.unit}</strong><small className={Math.abs(t.change) > 20 ? "red-text" : "amber-text"}>{t.change >= 0 ? "↑" : "↓"} {Math.abs(t.change)}%</small></div><Sparkline data={t.history} /></div>)}</div></section>
     <section><div className="section-title"><div><p className="eyebrow">PRIORITY QUEUE</p><h2>优先处理</h2></div><span>{report.issues.length} 项分析结果</span></div><div className="issues">{report.issues.map((i) => <IssueCard issue={i} key={i.id} />)}</div></section>
   </>;

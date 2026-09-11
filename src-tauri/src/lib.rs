@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     fs,
     path::PathBuf,
     process::Command,
@@ -72,6 +73,7 @@ fn default_alert_rules() -> Vec<AlertRule> {
         AlertRule { id:"memory".into(), name:"内存使用率".into(), expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100".into(), operator:Comparison::GreaterThan, threshold:90.0, for_checks:1, severity:"critical".into(), unit:"%".into() },
         AlertRule { id:"disk".into(), name:"磁盘剩余空间".into(), expr:"node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes * 100".into(), operator:Comparison::LessThan, threshold:10.0, for_checks:1, severity:"critical".into(), unit:"%".into() },
         AlertRule { id:"server_up".into(), name:"服务器在线状态".into(), expr:"up{job=~\"node.*\"}".into(), operator:Comparison::LessThan, threshold:1.0, for_checks:1, severity:"critical".into(), unit:"".into() },
+        AlertRule { id:"database".into(), name:"数据库在线状态".into(), expr:"max by(instance, job) ({__name__=~\"mysql_up|pg_up|mongodb_up|redis_up\"})".into(), operator:Comparison::LessThan, threshold:1.0, for_checks:1, severity:"critical".into(), unit:"".into() },
     ]
 }
 
@@ -100,6 +102,18 @@ impl Default for AppSettings {
 }
 
 fn hydrate_credentials(mut settings: AppSettings) -> AppSettings {
+    if !settings
+        .alert_rules
+        .iter()
+        .any(|rule| rule.id == "database")
+    {
+        if let Some(rule) = default_alert_rules()
+            .into_iter()
+            .find(|rule| rule.id == "database")
+        {
+            settings.alert_rules.push(rule);
+        }
+    }
     if settings.grafana_token.is_empty() {
         settings.grafana_token = credentials::load_grafana_token();
     }
@@ -157,7 +171,7 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 fn list_reports(db: State<'_, Database>) -> Result<Vec<Value>, String> {
     let conn = db.0.lock().map_err(|_| "数据库锁异常".to_string())?;
     let mut stmt = conn
-        .prepare("SELECT report_json FROM reports ORDER BY report_date DESC LIMIT 90")
+        .prepare("SELECT report_json FROM reports ORDER BY created_at DESC LIMIT 90")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
@@ -642,72 +656,74 @@ fn execute_monitor(
                 Err(error) => errors.push(format!("{} / {}：{}", rule.name, datasource_uid, error)),
             }
         }
-        let selected = samples.into_iter().reduce(|current, candidate| {
-            let chosen = rule
-                .operator
-                .aggregate([current.0.value, candidate.0.value].into_iter())
-                .unwrap_or(current.0.value);
-            if (chosen - candidate.0.value).abs() < f64::EPSILON {
-                candidate
-            } else {
-                current
-            }
-        });
-        let (sample, datasource_uid) = match selected
-            .ok_or_else(|| "查询结果为空；请至少选择一个 Prometheus 数据源".to_string())
-        {
-            Ok(sample) => sample,
-            Err(error) => {
-                errors.push(format!("{}：{}", rule.name, error));
-                continue;
-            }
-        };
-        let value = sample.value;
-        let mut instance_rule = rule.clone();
-        instance_rule.id = format!("{}@{}@{}", rule.id, datasource_uid, sample.instance);
-        instance_rule.name = format!("{} · {}", rule.name, sample.instance);
-        let previous = conn
-            .query_row(
-                "SELECT state_json FROM alert_states WHERE rule_id=?1",
-                [&instance_rule.id],
-                |row| row.get::<_, String>(0),
-            )
-            .ok()
-            .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
-        conn.execute(
+        if samples.is_empty() && rule.id == "database" {
+            continue;
+        }
+        if samples.is_empty() {
+            errors.push(format!("{}：查询结果为空", rule.name));
+            continue;
+        }
+        let mut instances: HashMap<(String, String, String), MetricSample> = HashMap::new();
+        for (sample, datasource_uid) in samples {
+            let key = (datasource_uid, sample.instance.clone(), sample.job.clone());
+            instances
+                .entry(key)
+                .and_modify(|current| {
+                    current.value = rule
+                        .operator
+                        .aggregate([current.value, sample.value].into_iter())
+                        .unwrap_or(current.value)
+                })
+                .or_insert(sample);
+        }
+        for ((datasource_uid, instance, job), sample) in instances {
+            let value = sample.value;
+            let mut instance_rule = rule.clone();
+            instance_rule.id = format!("{}@{}@{}", rule.id, datasource_uid, instance);
+            instance_rule.name = format!("{} · {}", rule.name, instance);
+            let previous = conn
+                .query_row(
+                    "SELECT state_json FROM alert_states WHERE rule_id=?1",
+                    [&instance_rule.id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+                .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
+            conn.execute(
             "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at) VALUES (?1,?2,?3,?4,?5)",
             params![instance_rule.id, instance_rule.name, value, rule.unit, now.to_rfc3339()],
         ).map_err(|e| e.to_string())?;
-        readings.push(MetricReading {
-            rule: instance_rule.clone(),
-            value,
-            instance: sample.instance,
-            job: sample.job,
-            datasource_uid,
-        });
-        let (state, event) = evaluate(
-            &instance_rule,
-            value,
-            previous,
-            settings.alert_cooldown_minutes.max(0),
-            now,
-        );
-        conn.execute(
-            "INSERT OR REPLACE INTO alert_states(rule_id,state_json) VALUES (?1,?2)",
-            params![
-                instance_rule.id,
-                serde_json::to_string(&state).map_err(|e| e.to_string())?
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        if let Some(event) = event {
-            let raw = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+            readings.push(MetricReading {
+                rule: instance_rule.clone(),
+                value,
+                instance,
+                job,
+                datasource_uid,
+            });
+            let (state, event) = evaluate(
+                &instance_rule,
+                value,
+                previous,
+                settings.alert_cooldown_minutes.max(0),
+                now,
+            );
             conn.execute(
+                "INSERT OR REPLACE INTO alert_states(rule_id,state_json) VALUES (?1,?2)",
+                params![
+                    instance_rule.id,
+                    serde_json::to_string(&state).map_err(|e| e.to_string())?
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            if let Some(event) = event {
+                let raw = serde_json::to_string(&event).map_err(|e| e.to_string())?;
+                conn.execute(
                 "INSERT INTO alert_events(id,rule_id,kind,severity,message,event_json,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
                 params![event.id, event.rule_id, event.kind, event.severity, event.message, raw, event.created_at],
             ).map_err(|e| e.to_string())?;
-            let _ = app.emit("monitor-alert", &event);
-            events.push(event);
+                let _ = app.emit("monitor-alert", &event);
+                events.push(event);
+            }
         }
     }
     let collected_at = now.to_rfc3339();
@@ -760,18 +776,35 @@ fn generate_and_store_report(
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     let now = Local::now();
     let date = now.format("%Y-%m-%d").to_string();
+    let window_start = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|value| value.and_local_timezone(Local).single())
+        .unwrap_or(now);
     let mut critical = 0_i64;
     let mut warning = 0_i64;
     let mut healthy = 0_i64;
     let mut services = Vec::new();
     let mut trends = Vec::new();
     let mut issues = Vec::new();
+    let mut total_samples = 0_i64;
 
     for reading in &run.readings {
+        let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 AND collected_at>=?2 AND collected_at<=?3 ORDER BY collected_at ASC").map_err(|e| e.to_string())?;
+        let day_values: Vec<f64> = stmt
+            .query_map(params![reading.rule.id, window_start.to_rfc3339(), now.to_rfc3339()], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        total_samples += day_values.len() as i64;
+        let average = day_values.iter().sum::<f64>() / day_values.len().max(1) as f64;
+        let minimum = day_values.iter().copied().reduce(f64::min).unwrap_or(reading.value);
+        let maximum = day_values.iter().copied().reduce(f64::max).unwrap_or(reading.value);
+        let analyzed_value = reading.rule.operator.aggregate(day_values.iter().copied()).unwrap_or(reading.value);
         let breached = reading
             .rule
             .operator
-            .matches(reading.value, reading.rule.threshold);
+            .matches(analyzed_value, reading.rule.threshold);
         if breached && reading.rule.severity == "critical" {
             critical += 1;
         } else if breached {
@@ -786,20 +819,29 @@ fn generate_and_store_report(
         } else {
             65
         };
+        let category = if reading.rule.id.starts_with("cpu@") {
+            "cpu"
+        } else if reading.rule.id.starts_with("memory@") {
+            "memory"
+        } else if reading.rule.id.starts_with("disk@") {
+            "disk"
+        } else if reading.rule.id.starts_with("database@") {
+            "database"
+        } else {
+            "availability"
+        };
         services.push(json!({
             "name": reading.rule.name,
             "kind": format!("服务器 {} · Prometheus", reading.instance),
             "score": service_score,
-            "metrics": [format!("{:.2}{}", reading.value, reading.rule.unit), format!("数据源 {}", reading.datasource_uid), format!("Job {}", if reading.job.is_empty() { "-" } else { &reading.job })]
+            "metrics": [format!("{:.2}{}", reading.value, reading.rule.unit), format!("数据源 {}", reading.datasource_uid), format!("Job {}", if reading.job.is_empty() { "-" } else { &reading.job })],
+            "instance": reading.instance, "category": category, "value": analyzed_value,
+            "unit": reading.rule.unit, "threshold": reading.rule.threshold,
+            "datasourceUid": reading.datasource_uid, "job": reading.job, "breached": breached,
+            "average": average, "minimum": minimum, "maximum": maximum, "sampleCount": day_values.len()
         }));
 
-        let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 ORDER BY collected_at DESC LIMIT 7").map_err(|e| e.to_string())?;
-        let mut history: Vec<f64> = stmt
-            .query_map([&reading.rule.id], |row| row.get(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .collect();
-        history.reverse();
+        let history: Vec<f64> = day_values.iter().step_by((day_values.len() / 24).max(1)).copied().collect();
         let first = history.first().copied().unwrap_or(reading.value);
         let change = if first.abs() < f64::EPSILON {
             0.0
@@ -814,8 +856,8 @@ fn generate_and_store_report(
                 "severity": reading.rule.severity,
                 "title": format!("{}超过告警阈值", reading.rule.name),
                 "source": format!("服务器 {} · 数据源 {}", reading.instance, reading.datasource_uid),
-                "change": format!("{:.2}{}", reading.value, reading.rule.unit),
-                "reason": format!("服务器 {}（job={}）实际值 {:.2}{}，配置阈值 {:.2}{}。", reading.instance, reading.job, reading.value, reading.rule.unit, reading.rule.threshold, reading.rule.unit),
+                "change": format!("{:.2}{}", analyzed_value, reading.rule.unit),
+                "reason": format!("服务器 {}（job={}）当日最需关注值 {:.2}{}，日均 {:.2}{}，阈值 {:.2}{}。", reading.instance, reading.job, analyzed_value, reading.rule.unit, average, reading.rule.unit, reading.rule.threshold, reading.rule.unit),
                 "recommendations": ["核对对应实例和标签", "检查同一时间窗口的日志与发布记录", "确认指标是否持续异常"]
             }));
         }
@@ -845,26 +887,29 @@ fn generate_and_store_report(
         .unwrap_or(0);
     let summary = if critical > 0 {
         format!(
-            "本次从 Grafana 采集 {} 项真实指标，发现 {} 项严重异常、{} 项警告。",
-            run.readings.len(),
+            "已分析今日 00:00 至当前的 {} 条采样，发现 {} 项严重异常、{} 项警告。",
+            total_samples,
             critical,
             warning
         )
     } else if warning > 0 {
         format!(
-            "本次从 Grafana 采集 {} 项真实指标，发现 {} 项需要关注的问题。",
-            run.readings.len(),
+            "已分析今日 00:00 至当前的 {} 条采样，发现 {} 项需要关注的问题。",
+            total_samples,
             warning
         )
     } else {
         format!(
-            "本次从 Grafana 采集的 {} 项真实指标均在配置阈值内。",
-            run.readings.len()
+            "已分析今日 00:00 至当前的 {} 条采样，均在配置阈值内。",
+            total_samples
         )
     };
+    let report_number: i64 = conn.query_row("SELECT COUNT(*) + 1 FROM reports WHERE report_date=?1", [&date], |row| row.get(0)).unwrap_or(1);
     let report = json!({
-        "id":format!("report-{date}"), "date":date, "score":score, "status":status,
+        "id":format!("report-{}-{}", date, now.timestamp_millis()), "date":date, "score":score, "status":status,
         "summary":summary, "generatedAt":now.format("%Y-%m-%d %H:%M:%S").to_string(),
+        "analysisNumber":report_number, "windowStart":window_start.format("%Y-%m-%d %H:%M:%S").to_string(),
+        "windowEnd":now.format("%Y-%m-%d %H:%M:%S").to_string(), "sampleCount":total_samples,
         "stats":{"critical":critical,"warning":warning,"healthy":healthy,"alerts":active_alerts},
         "services":services, "trends":trends, "issues":issues
     });

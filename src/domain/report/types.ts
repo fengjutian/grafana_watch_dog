@@ -3,9 +3,10 @@ export type Status = "critical" | "high" | "warning" | "healthy";
 
 export interface Issue { id: string; severity: Severity; title: string; source: string; change: string; reason: string; recommendations: string[] }
 export interface Trend { label: string; value: number; unit: string; change: number; history: number[] }
-export interface ServiceHealth { name: string; kind: string; score: number; metrics: string[] }
+export interface ServiceHealth { name: string; kind: string; score: number; metrics: string[]; instance?: string; category?: "cpu" | "memory" | "disk" | "database" | "availability"; value?: number; unit?: string; threshold?: number; datasourceUid?: string; job?: string; breached?: boolean; average?: number; minimum?: number; maximum?: number; sampleCount?: number }
 export interface Report {
   id: string; date: string; score: number; status: Status; summary: string; generatedAt: string;
+  analysisNumber?: number; windowStart?: string; windowEnd?: string; sampleCount?: number;
   stats: { critical: number; warning: number; healthy: number; alerts: number };
   services: ServiceHealth[]; trends: Trend[]; issues: Issue[];
 }
@@ -31,4 +32,4 @@ export interface GrafanaDashboard { uid: string; title: string }
 export interface GrafanaDiscovery { datasources: GrafanaDatasource[]; dashboards: GrafanaDashboard[] }
 
 export interface McpTool { name: string; description: string }
-export interface McpInstallResult { command: string; argsPrefix: string[]; method: "existing" | "uvx" | "go"; message: string }
+export interface McpInstallResult { command: string; argsPrefix: string[]; method: "existing" | "uv-tool" | "go"; message: string }
