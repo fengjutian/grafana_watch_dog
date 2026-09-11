@@ -76,7 +76,7 @@ function ServerOverview({ services }: { services: Report["services"] }) {
       <div className="server-head"><div><span className="server-avatar">{server.slice(0, 2).toUpperCase()}</span><span><h3>{server}</h3><small>{metrics[0]?.datasourceUid ? `Prometheus · ${metrics[0].datasourceUid}` : "Prometheus 监控实例"}</small></span></div><i className={`status-pill ${available?.breached ? "critical" : "healthy"}`}>● {available?.breached ? "离线" : "在线"}</i></div>
       <div className="server-metrics">{(["cpu", "memory", "disk", "database"] as const).map(category => {
         const metric = metrics.find(item => item.category === category); const meta = metricMeta[category];
-        return <div className={`server-metric ${metric?.breached ? "bad" : ""}`} key={category}><div><b>{meta.icon}</b><span>{meta.label}</span></div>{metric ? <><strong>{metric.value?.toLocaleString(undefined, { maximumFractionDigits: 2 })}{metric.unit}</strong><small>{category === "database" ? (metric.value === 1 ? "运行正常" : "连接异常") : `阈值 ${metric.threshold}${metric.unit ?? ""}`}</small></> : <><strong className="muted-value">—</strong><small>未采集到该指标</small></>}</div>;
+        return <div className={`server-metric ${metric?.breached ? "bad" : ""}`} key={category}><div><b>{meta.icon}</b><span>{meta.label}</span></div>{metric ? <><strong>{metric.value?.toLocaleString(undefined, { maximumFractionDigits: 2 })}{metric.unit}</strong><small>{category === "database" ? (metric.value === 1 ? "运行正常" : "连接异常") : `日均 ${metric.average?.toFixed(2)}${metric.unit ?? ""} · 范围 ${metric.minimum?.toFixed(2)}–${metric.maximum?.toFixed(2)} · ${metric.sampleCount} 次`}</small></> : <><strong className="muted-value">—</strong><small>未采集到该指标</small></>}</div>;
       })}</div>
     </article>;
   })}</div>;
@@ -84,7 +84,7 @@ function ServerOverview({ services }: { services: Report["services"] }) {
 
 function Dashboard({ report, onGenerate, generating }: { report: Report; onGenerate: () => void; generating: boolean }) {
   return <>
-    <div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW · {report.date}</p><h1>早上好，系统值得你关注一下。</h1><p>过去 24 小时的核心运行状态已经整理完毕。</p></div><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div>
+    <div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW · {report.date}{report.analysisNumber ? ` · 第 ${report.analysisNumber} 次分析` : ""}</p><h1>早上好，系统值得你关注一下。</h1><p>{report.windowStart ? `分析窗口：${report.windowStart} 至 ${report.windowEnd}，共 ${report.sampleCount ?? 0} 条采样。` : "该历史日报使用旧版快照采集方式。"}</p></div><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div>
     <section className="hero-grid">
       <div className="card health-card"><div className="section-head"><div><span className="section-kicker">SYSTEM HEALTH</span><h2>系统健康度</h2></div><span className={`status-pill ${report.status}`}>● {statusLabel(report.status)}</span></div><HealthGauge score={report.score} /></div>
       <div className="card conclusion"><div className="conclusion-top"><span className="ai-mark"><IconSparkles size={20} /></span><div><span className="section-kicker">AI CONCLUSION</span><h2>今日结论</h2></div></div><blockquote>{report.summary}</blockquote><div className="stat-row"><div><b className="red-text">{report.stats.critical}</b><span>严重问题</span></div><div><b className="amber-text">{report.stats.warning}</b><span>需要关注</span></div><div><b className="green-text">{report.stats.healthy}</b><span>正常指标</span></div><div><b>{report.stats.alerts}</b><span>昨日告警</span></div></div></div>
@@ -96,7 +96,7 @@ function Dashboard({ report, onGenerate, generating }: { report: Report; onGener
 }
 
 function Reports({ reports, onSelect }: { reports: Report[]; onSelect: (r: Report) => void }) {
-  return <><div className="page-title"><div><p className="eyebrow">REPORT ARCHIVE</p><h1>日报历史</h1><p>回看系统健康度变化，快速定位状态转折点。</p></div></div>{reports.length === 0 ? <EmptyState title="暂无真实日报" detail="SQLite 中还没有采集生成的日报记录。" /> : <div className="card report-table"><div className="table-head"><span>日期</span><span>健康度</span><span>状态</span><span>关键摘要</span><span /></div>{reports.map((r) => <button className="report-row" key={r.id} onClick={() => onSelect(r)}><span><b>{r.date}</b><small>{r.generatedAt}</small></span><span className={`score ${scoreTone(r.score)}`}>{r.score}</span><span><i className={`status-pill ${r.status}`}>● {statusLabel(r.status)}</i></span><span>{r.summary}</span><span>→</span></button>)}</div>}</>;
+  return <><div className="page-title"><div><p className="eyebrow">REPORT ARCHIVE</p><h1>日报历史</h1><p>同一天的多次分析会独立保存，可对比状态变化。</p></div></div>{reports.length === 0 ? <EmptyState title="暂无真实日报" detail="SQLite 中还没有采集生成的日报记录。" /> : <div className="card report-table"><div className="table-head"><span>日期/分析</span><span>健康度</span><span>状态</span><span>关键摘要</span><span /></div>{reports.map((r) => <button className="report-row" key={r.id} onClick={() => onSelect(r)}><span><b>{r.date}{r.analysisNumber ? ` · #${r.analysisNumber}` : ""}</b><small>{r.generatedAt}{r.sampleCount ? ` · ${r.sampleCount} 条` : ""}</small></span><span className={`score ${scoreTone(r.score)}`}>{r.score}</span><span><i className={`status-pill ${r.status}`}>● {statusLabel(r.status)}</i></span><span>{r.summary}</span><span>→</span></button>)}</div>}</>;
 }
 
 function EmptyState({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
@@ -158,6 +158,15 @@ export default function WatchDogWorkspace() {
   const [page, setPage] = useState<Page>("dashboard"); const [reports, setReports] = useState<Report[]>([]); const [events, setEvents] = useState<AlertEvent[]>([]); const [eventsLoading, setEventsLoading] = useState(false); const [selected, setSelected] = useState<Report | null>(null); const [settings, setSettings] = useState(defaultSettings); const [generating, setGenerating] = useState(false); const [generationError, setGenerationError] = useState(""); const [toast, setToast] = useState(""); const [loadError, setLoadError] = useState("");
   const refreshEvents = async () => { setEventsLoading(true); try { setEvents(await listAlertEvents()); } catch (error) { setLoadError(errorMessage(error, "读取告警历史失败")); } finally { setEventsLoading(false); } };
   useEffect(() => { listReports().then(setReports).catch(error => setLoadError(errorMessage(error, "读取日报失败"))); loadSettings().then(setSettings).catch(error => setLoadError(errorMessage(error, "读取设置失败"))); refreshEvents(); }, []);
+  useEffect(() => {
+    if (!settings.monitorEnabled) return;
+    const refresh = () => {
+      listReports().then(setReports).catch(error => setLoadError(errorMessage(error, "刷新日报失败")));
+      listAlertEvents().then(setEvents).catch(error => setLoadError(errorMessage(error, "刷新告警失败")));
+    };
+    const timer = window.setInterval(refresh, Math.max(1, settings.monitorIntervalMinutes) * 60_000);
+    return () => window.clearInterval(timer);
+  }, [settings.monitorEnabled, settings.monitorIntervalMinutes]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false; const cleanups: (() => void)[] = [];

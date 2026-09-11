@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Duration as ChronoDuration, Local};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -776,11 +776,7 @@ fn generate_and_store_report(
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     let now = Local::now();
     let date = now.format("%Y-%m-%d").to_string();
-    let window_start = now
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .and_then(|value| value.and_local_timezone(Local).single())
-        .unwrap_or(now);
+    let window_start = now - ChronoDuration::hours(24);
     let mut critical = 0_i64;
     let mut warning = 0_i64;
     let mut healthy = 0_i64;
@@ -792,15 +788,30 @@ fn generate_and_store_report(
     for reading in &run.readings {
         let mut stmt = conn.prepare("SELECT value FROM metric_samples WHERE rule_id=?1 AND collected_at>=?2 AND collected_at<=?3 ORDER BY collected_at ASC").map_err(|e| e.to_string())?;
         let day_values: Vec<f64> = stmt
-            .query_map(params![reading.rule.id, window_start.to_rfc3339(), now.to_rfc3339()], |row| row.get(0))
+            .query_map(
+                params![reading.rule.id, window_start.to_rfc3339(), now.to_rfc3339()],
+                |row| row.get(0),
+            )
             .map_err(|e| e.to_string())?
             .filter_map(Result::ok)
             .collect();
         total_samples += day_values.len() as i64;
         let average = day_values.iter().sum::<f64>() / day_values.len().max(1) as f64;
-        let minimum = day_values.iter().copied().reduce(f64::min).unwrap_or(reading.value);
-        let maximum = day_values.iter().copied().reduce(f64::max).unwrap_or(reading.value);
-        let analyzed_value = reading.rule.operator.aggregate(day_values.iter().copied()).unwrap_or(reading.value);
+        let minimum = day_values
+            .iter()
+            .copied()
+            .reduce(f64::min)
+            .unwrap_or(reading.value);
+        let maximum = day_values
+            .iter()
+            .copied()
+            .reduce(f64::max)
+            .unwrap_or(reading.value);
+        let analyzed_value = reading
+            .rule
+            .operator
+            .aggregate(day_values.iter().copied())
+            .unwrap_or(reading.value);
         let breached = reading
             .rule
             .operator
@@ -841,7 +852,11 @@ fn generate_and_store_report(
             "average": average, "minimum": minimum, "maximum": maximum, "sampleCount": day_values.len()
         }));
 
-        let history: Vec<f64> = day_values.iter().step_by((day_values.len() / 24).max(1)).copied().collect();
+        let history: Vec<f64> = day_values
+            .iter()
+            .step_by((day_values.len() / 24).max(1))
+            .copied()
+            .collect();
         let first = history.first().copied().unwrap_or(reading.value);
         let change = if first.abs() < f64::EPSILON {
             0.0
@@ -887,24 +902,27 @@ fn generate_and_store_report(
         .unwrap_or(0);
     let summary = if critical > 0 {
         format!(
-            "已分析今日 00:00 至当前的 {} 条采样，发现 {} 项严重异常、{} 项警告。",
-            total_samples,
-            critical,
-            warning
+            "已分析过去 24 小时的 {} 条采样，发现 {} 项严重异常、{} 项警告。",
+            total_samples, critical, warning
         )
     } else if warning > 0 {
         format!(
-            "已分析今日 00:00 至当前的 {} 条采样，发现 {} 项需要关注的问题。",
-            total_samples,
-            warning
+            "已分析过去 24 小时的 {} 条采样，发现 {} 项需要关注的问题。",
+            total_samples, warning
         )
     } else {
         format!(
-            "已分析今日 00:00 至当前的 {} 条采样，均在配置阈值内。",
+            "已分析过去 24 小时的 {} 条采样，均在配置阈值内。",
             total_samples
         )
     };
-    let report_number: i64 = conn.query_row("SELECT COUNT(*) + 1 FROM reports WHERE report_date=?1", [&date], |row| row.get(0)).unwrap_or(1);
+    let report_number: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) + 1 FROM reports WHERE report_date=?1",
+            [&date],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
     let report = json!({
         "id":format!("report-{}-{}", date, now.timestamp_millis()), "date":date, "score":score, "status":status,
         "summary":summary, "generatedAt":now.format("%Y-%m-%d %H:%M:%S").to_string(),
