@@ -31,6 +31,26 @@ pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String
         });
     }
 
+    if command_works("uv", &["--version"]) {
+        let output = Command::new("uv")
+            .args(["tool", "install", "mcp-grafana"])
+            .output()
+            .map_err(|e| format!("无法启动 uv tool install：{e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("持久安装 mcp-grafana 失败：{}", stderr.trim()));
+        }
+        if !command_works("mcp-grafana", &["--help"]) {
+            return Err("uv 已完成安装，但 mcp-grafana 仍不在 PATH 中；请重启应用后再试".into());
+        }
+        return Ok(InstallResult {
+            command: "mcp-grafana".into(),
+            args_prefix: vec![],
+            method: "uv-tool".into(),
+            message: "已通过 uv tool 持久安装 mcp-grafana".into(),
+        });
+    }
+
     if command_works("go", &["version"]) {
         fs::create_dir_all(tools_dir).map_err(|e| format!("无法创建工具目录：{e}"))?;
         let output = Command::new("go")
@@ -58,5 +78,5 @@ pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String
         });
     }
 
-    Err("未找到 Go，无法持久安装 mcp-grafana。请先安装 Go 后再试。".into())
+    Err("未找到 uv 或 Go，无法持久安装 mcp-grafana。".into())
 }
