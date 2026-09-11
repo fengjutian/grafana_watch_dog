@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Tooltip } from "@mantine/core";
 import { IconAdjustments, IconBell, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
+import ReactECharts from "echarts-for-react";
 import { analyzeAlerts, diagnoseConnection, discoverGrafana, generateReport, installMcpGrafana, listAlertEvents, listMcpTools, listReports, loadSettings, runMonitorNow, saveSettings } from "../../infrastructure/tauri/client";
 import { defaultSettings } from "../../domain/settings/defaults";
 import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, Issue, McpTool, Report, Status } from "../../domain/report/types";
@@ -34,13 +35,6 @@ function errorMessage(error: unknown, fallback: string) {
 
 function statusLabel(status: Status) { return ({ critical: "严重", high: "高风险", warning: "需关注", healthy: "健康" })[status]; }
 function scoreTone(score: number) { return score >= 90 ? "green" : score >= 75 ? "amber" : score >= 60 ? "orange" : "red"; }
-
-function Sparkline({ data }: { data: number[] }) {
-  const values = data.length === 1 ? [data[0], data[0]] : data;
-  const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
-  const points = values.map((v, i) => `${(i / (values.length - 1)) * 120},${38 - ((v - min) / range) * 30}`).join(" ");
-  return <svg className="spark" viewBox="0 0 120 44" aria-label="最近采集趋势"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2.5" /><circle cx="120" cy={38 - ((values.at(-1)! - min) / range) * 30} r="3.5" fill="currentColor" /></svg>;
-}
 
 function IssueCard({ issue }: { issue: Issue }) {
   return <article className={`issue ${issue.severity}`}>
@@ -77,9 +71,25 @@ function ServerOverview({ services }: { services: Report["services"] }) {
 function MetricPanel({ category, services, report }: { category: "cpu" | "memory" | "disk"; services: Report["services"]; report: Report }) {
   const metrics = services.filter(service => service.category === category);
   const values = metrics.flatMap(metric => [metric.minimum, metric.average, metric.maximum].filter((value): value is number => typeof value === "number"));
-  const history = report.trends.filter(trend => metrics.some(metric => trend.label === metric.name && (trend.datasourceUid ?? metric.datasourceUid) === metric.datasourceUid)).flatMap(trend => trend.history);
   const current = metrics.length ? metrics.reduce((sum, metric) => sum + (metric.average ?? metric.value ?? 0), 0) / metrics.length : 0;
-  return <article className="card grafana-panel"><div className="panel-title"><b>{metricMeta[category].label}</b><small>{metrics.length} 个实例</small></div><div className="panel-chart"><Sparkline data={history.length ? history : [0, 0]} /></div><div className="panel-legend"><span><i className="blue-dot" />平均 <b>{current.toFixed(2)}%</b></span><span>最低 <b>{values.length ? Math.min(...values).toFixed(2) : "—"}</b></span><span>最高 <b>{values.length ? Math.max(...values).toFixed(2) : "—"}</b></span></div></article>;
+  const trends = report.trends.filter(trend => metrics.some(metric => trend.label === metric.name && (trend.datasourceUid ?? metric.datasourceUid) === metric.datasourceUid));
+  const maxPoints = Math.max(0, ...trends.map(trend => trend.history.length));
+  const start = report.windowStart ? new Date(report.windowStart.replace(" ", "T")).getTime() : Date.now() - 86_400_000;
+  const end = report.windowEnd ? new Date(report.windowEnd.replace(" ", "T")).getTime() : Date.now();
+  const labels = Array.from({ length: maxPoints }, (_, index) => new Date(start + ((end - start) * index / Math.max(1, maxPoints - 1))).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
+  const colors = ["#5794f2", "#73bf69", "#f2cc0c", "#ff9830", "#b877d9", "#e02f44"];
+  const option = {
+    animation: false, color: colors,
+    tooltip: { trigger: "axis", backgroundColor: "rgba(24,27,31,.96)", borderWidth: 0, textStyle: { color: "#fff", fontSize: 11 }, valueFormatter: (value: number) => `${Number(value).toFixed(2)}%` },
+    legend: { type: "scroll", bottom: 0, left: 8, right: 8, itemWidth: 12, itemHeight: 3, textStyle: { fontSize: 9, color: "#59616c" } },
+    grid: { top: 16, left: 42, right: 16, bottom: 44 },
+    xAxis: { type: "category", boundaryGap: false, data: labels, axisLine: { lineStyle: { color: "#cfd4da" } }, axisLabel: { color: "#7b828c", fontSize: 8, hideOverlap: true }, splitLine: { show: true, lineStyle: { color: "#eef0f3" } } },
+    yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#7b828c", fontSize: 8 }, splitLine: { lineStyle: { color: "#e8ebef" } } },
+    dataZoom: [{ type: "inside", zoomOnMouseWheel: true, moveOnMouseMove: true }],
+    series: trends.map((trend, index) => ({ name: trend.instance ?? trend.label, type: "line", showSymbol: false, smooth: .18, sampling: "lttb", connectNulls: false, lineStyle: { width: 1.8 }, areaStyle: index === 0 ? { opacity: .06 } : undefined, data: trend.history, markLine: index === 0 && metrics[0]?.threshold !== undefined ? { silent: true, symbol: "none", label: { formatter: `阈值 ${metrics[0].threshold}%`, fontSize: 8 }, lineStyle: { color: "#e02f44", type: "dashed", width: 1 }, data: [{ yAxis: metrics[0].threshold }] } : undefined })),
+    graphic: trends.length ? undefined : [{ type: "text", left: "center", top: "middle", style: { text: "暂无该数据源的时序样本", fill: "#9299a3", fontSize: 11 } }],
+  };
+  return <article className="card grafana-panel"><div className="panel-title"><b>{metricMeta[category].label}</b><small>{metrics.length} 个实例</small></div><ReactECharts option={option} notMerge lazyUpdate className="echarts-timeseries" /><div className="panel-legend panel-stats"><span>平均 <b>{current.toFixed(2)}%</b></span><span>最低 <b>{values.length ? Math.min(...values).toFixed(2) : "—"}</b></span><span>最高 <b>{values.length ? Math.max(...values).toFixed(2) : "—"}</b></span></div></article>;
 }
 
 function Dashboard({ report, onGenerate, generating }: { report: Report; onGenerate: () => void; generating: boolean }) {
