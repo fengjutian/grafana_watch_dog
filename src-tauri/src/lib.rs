@@ -164,7 +164,19 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
           collected_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_grafana_snapshots_time ON grafana_snapshots(collected_at DESC);",
-    )
+    )?;
+    for column in [
+        "datasource_uid TEXT",
+        "instance TEXT",
+        "job TEXT",
+        "category TEXT",
+    ] {
+        let _ = conn.execute(
+            &format!("ALTER TABLE metric_samples ADD COLUMN {column}"),
+            [],
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -603,6 +615,54 @@ struct MetricReading {
     datasource_uid: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricSeriesPoint {
+    datasource_uid: String,
+    instance: String,
+    job: String,
+    category: String,
+    label: String,
+    value: f64,
+    unit: String,
+    collected_at: String,
+}
+
+#[tauri::command]
+fn list_metric_series(
+    app: tauri::AppHandle,
+    hours: Option<i64>,
+) -> Result<Vec<MetricSeriesPoint>, String> {
+    let conn = Connection::open(db_path(&app)?).map_err(|e| e.to_string())?;
+    let cutoff =
+        (Local::now() - ChronoDuration::hours(hours.unwrap_or(24).clamp(1, 168))).to_rfc3339();
+    let mut stmt = conn
+        .prepare("SELECT rule_id,rule_name,value,unit,collected_at,datasource_uid,instance,category,job FROM metric_samples WHERE collected_at>=?1 ORDER BY collected_at ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([cutoff], |row| {
+            let rule_id: String = row.get(0)?;
+            let mut parts = rule_id.splitn(3, '@');
+            let parsed_category = parts.next().unwrap_or("unknown").to_string();
+            let parsed_datasource = parts.next().unwrap_or("legacy").to_string();
+            let parsed_instance = parts.next().unwrap_or("未知实例").to_string();
+            Ok(MetricSeriesPoint {
+                category: row.get::<_, Option<String>>(7)?.unwrap_or(parsed_category),
+                datasource_uid: row
+                    .get::<_, Option<String>>(5)?
+                    .unwrap_or(parsed_datasource),
+                instance: row.get::<_, Option<String>>(6)?.unwrap_or(parsed_instance),
+                job: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                label: row.get(1)?,
+                value: row.get(2)?,
+                unit: row.get(3)?,
+                collected_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
 fn execute_monitor(
     app: &tauri::AppHandle,
     settings: &AppSettings,
@@ -690,8 +750,8 @@ fn execute_monitor(
                 .ok()
                 .and_then(|raw| serde_json::from_str::<AlertState>(&raw).ok());
             conn.execute(
-            "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at) VALUES (?1,?2,?3,?4,?5)",
-            params![instance_rule.id, instance_rule.name, value, rule.unit, now.to_rfc3339()],
+            "INSERT INTO metric_samples(rule_id,rule_name,value,unit,collected_at,datasource_uid,instance,job,category) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![instance_rule.id, instance_rule.name, value, rule.unit, now.to_rfc3339(), datasource_uid, instance, job, rule.id],
         ).map_err(|e| e.to_string())?;
             readings.push(MetricReading {
                 rule: instance_rule.clone(),
@@ -1121,6 +1181,7 @@ pub fn run() {
             call_mcp_tool,
             run_monitor_now,
             list_alert_events,
+            list_metric_series,
             analyze_alerts,
             install_mcp_grafana
         ])

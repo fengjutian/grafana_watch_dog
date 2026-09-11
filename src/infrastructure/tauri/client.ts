@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defaultSettings } from "../../domain/settings/defaults";
-import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, McpInstallResult, McpTool, MonitorRunResult, Report } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, McpInstallResult, McpTool, MetricSeriesPoint, MonitorRunResult, Report } from "../../domain/report/types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -59,6 +59,11 @@ export async function runMonitorNow(settings: AppSettings): Promise<MonitorRunRe
 export async function listAlertEvents(): Promise<AlertEvent[]> {
   if (!isTauri()) return [];
   return invoke("list_alert_events");
+}
+
+export async function listMetricSeries(hours = 24): Promise<MetricSeriesPoint[]> {
+  if (!isTauri()) return [];
+  return invoke("list_metric_series", { hours });
 }
 
 export async function analyzeAlerts(settings: AppSettings, question: string): Promise<string> {

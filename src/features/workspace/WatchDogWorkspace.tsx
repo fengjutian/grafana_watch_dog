@@ -2,12 +2,18 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Tooltip } from "@mantine/core";
 import { IconAdjustments, IconBell, IconBrain, IconDownload, IconFileAnalytics, IconLayoutDashboard, IconRefresh, IconServerCog, IconSparkles } from "@tabler/icons-react";
 import { listen } from "@tauri-apps/api/event";
-import ReactECharts from "echarts-for-react";
-import { analyzeAlerts, diagnoseConnection, discoverGrafana, generateReport, installMcpGrafana, listAlertEvents, listMcpTools, listReports, loadSettings, runMonitorNow, saveSettings } from "../../infrastructure/tauri/client";
+import ReactEChartsCore from "echarts-for-react/lib/core";
+import * as echarts from "echarts/core";
+import { LineChart } from "echarts/charts";
+import { DataZoomComponent, GraphicComponent, GridComponent, LegendComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+import { analyzeAlerts, diagnoseConnection, discoverGrafana, generateReport, installMcpGrafana, listAlertEvents, listMcpTools, listMetricSeries, listReports, loadSettings, runMonitorNow, saveSettings } from "../../infrastructure/tauri/client";
 import { defaultSettings } from "../../domain/settings/defaults";
-import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, Issue, McpTool, Report, Status } from "../../domain/report/types";
+import type { AlertEvent, AppSettings, ConnectionDiagnostic, GrafanaDiscovery, Issue, McpTool, MetricSeriesPoint, Report, ServiceHealth, Status } from "../../domain/report/types";
 
 type Page = "dashboard" | "reports" | "alerts" | "analysis" | "mcp" | "settings";
+
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkLineComponent, GraphicComponent, CanvasRenderer]);
 
 const icons = { dashboard: IconLayoutDashboard, reports: IconFileAnalytics, alerts: IconBell, analysis: IconBrain, mcp: IconServerCog, settings: IconAdjustments };
 const nav: { id: Page; label: string }[] = [
@@ -68,36 +74,46 @@ function ServerOverview({ services }: { services: Report["services"] }) {
   })}</div>;
 }
 
-function MetricPanel({ category, services, report }: { category: "cpu" | "memory" | "disk"; services: Report["services"]; report: Report }) {
+function MetricPanel({ category, services, points }: { category: "cpu" | "memory" | "disk"; services: Report["services"]; points: MetricSeriesPoint[] }) {
   const metrics = services.filter(service => service.category === category);
   const values = metrics.flatMap(metric => [metric.minimum, metric.average, metric.maximum].filter((value): value is number => typeof value === "number"));
   const current = metrics.length ? metrics.reduce((sum, metric) => sum + (metric.average ?? metric.value ?? 0), 0) / metrics.length : 0;
-  const trends = report.trends.filter(trend => metrics.some(metric => trend.label === metric.name && (trend.datasourceUid ?? metric.datasourceUid) === metric.datasourceUid));
-  const maxPoints = Math.max(0, ...trends.map(trend => trend.history.length));
-  const start = report.windowStart ? new Date(report.windowStart.replace(" ", "T")).getTime() : Date.now() - 86_400_000;
-  const end = report.windowEnd ? new Date(report.windowEnd.replace(" ", "T")).getTime() : Date.now();
-  const labels = Array.from({ length: maxPoints }, (_, index) => new Date(start + ((end - start) * index / Math.max(1, maxPoints - 1))).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }));
+  const instances = [...new Set(metrics.map(metric => metric.instance).filter(Boolean) as string[])];
   const colors = ["#5794f2", "#73bf69", "#f2cc0c", "#ff9830", "#b877d9", "#e02f44"];
   const option = {
     animation: false, color: colors,
     tooltip: { trigger: "axis", backgroundColor: "rgba(24,27,31,.96)", borderWidth: 0, textStyle: { color: "#fff", fontSize: 11 }, valueFormatter: (value: number) => `${Number(value).toFixed(2)}%` },
     legend: { type: "scroll", bottom: 0, left: 8, right: 8, itemWidth: 12, itemHeight: 3, textStyle: { fontSize: 9, color: "#59616c" } },
     grid: { top: 16, left: 42, right: 16, bottom: 44 },
-    xAxis: { type: "category", boundaryGap: false, data: labels, axisLine: { lineStyle: { color: "#cfd4da" } }, axisLabel: { color: "#7b828c", fontSize: 8, hideOverlap: true }, splitLine: { show: true, lineStyle: { color: "#eef0f3" } } },
+    xAxis: { type: "time", boundaryGap: false, axisLine: { lineStyle: { color: "#cfd4da" } }, axisLabel: { color: "#7b828c", fontSize: 8, hideOverlap: true, formatter: "{HH}:{mm}" }, splitLine: { show: true, lineStyle: { color: "#eef0f3" } } },
     yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#7b828c", fontSize: 8 }, splitLine: { lineStyle: { color: "#e8ebef" } } },
     dataZoom: [{ type: "inside", zoomOnMouseWheel: true, moveOnMouseMove: true }],
-    series: trends.map((trend, index) => ({ name: trend.instance ?? trend.label, type: "line", showSymbol: false, smooth: .18, sampling: "lttb", connectNulls: false, lineStyle: { width: 1.8 }, areaStyle: index === 0 ? { opacity: .06 } : undefined, data: trend.history, markLine: index === 0 && metrics[0]?.threshold !== undefined ? { silent: true, symbol: "none", label: { formatter: `阈值 ${metrics[0].threshold}%`, fontSize: 8 }, lineStyle: { color: "#e02f44", type: "dashed", width: 1 }, data: [{ yAxis: metrics[0].threshold }] } : undefined })),
-    graphic: trends.length ? undefined : [{ type: "text", left: "center", top: "middle", style: { text: "暂无该数据源的时序样本", fill: "#9299a3", fontSize: 11 } }],
+    series: instances.map((instance, index) => ({ name: instance, type: "line", showSymbol: false, smooth: .18, sampling: "lttb", connectNulls: false, lineStyle: { width: 1.8 }, areaStyle: index === 0 ? { opacity: .06 } : undefined, data: points.filter(point => point.category === category && point.instance === instance).map(point => [new Date(point.collectedAt).getTime(), point.value]), markLine: index === 0 && metrics[0]?.threshold !== undefined ? { silent: true, symbol: "none", label: { formatter: `阈值 ${metrics[0].threshold}%`, fontSize: 8 }, lineStyle: { color: "#e02f44", type: "dashed", width: 1 }, data: [{ yAxis: metrics[0].threshold }] } : undefined })),
+    graphic: instances.length ? undefined : [{ type: "text", left: "center", top: "middle", style: { text: "暂无该数源的时序样本", fill: "#9299a3", fontSize: 11 } }],
   };
-  return <article className="card grafana-panel"><div className="panel-title"><b>{metricMeta[category].label}</b><small>{metrics.length} 个实例</small></div><ReactECharts option={option} notMerge lazyUpdate className="echarts-timeseries" /><div className="panel-legend panel-stats"><span>平均 <b>{current.toFixed(2)}%</b></span><span>最低 <b>{values.length ? Math.min(...values).toFixed(2) : "—"}</b></span><span>最高 <b>{values.length ? Math.max(...values).toFixed(2) : "—"}</b></span></div></article>;
+  return <article className="card grafana-panel"><div className="panel-title"><b>{metricMeta[category].label}</b><small>{metrics.length} 个实例</small></div><ReactEChartsCore echarts={echarts} option={option} notMerge lazyUpdate className="echarts-timeseries" /><div className="panel-legend panel-stats"><span>平均 <b>{current.toFixed(2)}%</b></span><span>最低 <b>{values.length ? Math.min(...values).toFixed(2) : "—"}</b></span><span>最高 <b>{values.length ? Math.max(...values).toFixed(2) : "—"}</b></span></div></article>;
 }
 
-function Dashboard({ report, onGenerate, generating }: { report: Report; onGenerate: () => void; generating: boolean }) {
-  const datasourceOptions = [...new Set(report.services.map(service => service.datasourceUid ?? "legacy"))].sort();
+function liveServices(points: MetricSeriesPoint[], settings: AppSettings): ServiceHealth[] {
+  const groups = new Map<string, MetricSeriesPoint[]>();
+  points.forEach(point => { const key = `${point.datasourceUid}\u0000${point.instance}\u0000${point.category}`; groups.set(key, [...(groups.get(key) ?? []), point]); });
+  return [...groups.values()].map(samples => {
+    const latest = samples.at(-1)!; const values = samples.map(sample => sample.value);
+    const rule = settings.alertRules.find(item => item.id === latest.category); const threshold = rule?.threshold;
+    const worst = rule?.operator.startsWith("less") ? Math.min(...values) : Math.max(...values);
+    const breached = threshold === undefined ? false : rule?.operator === "greater_than" ? worst > threshold : rule?.operator === "greater_or_equal" ? worst >= threshold : rule?.operator === "less_than" ? worst < threshold : rule?.operator === "less_or_equal" ? worst <= threshold : worst === threshold;
+    return { name: latest.label, kind: `服务器 ${latest.instance} · Prometheus`, score: breached ? 35 : 100, metrics: [], instance: latest.instance, job: latest.job, datasourceUid: latest.datasourceUid, category: latest.category as ServiceHealth["category"], value: worst, unit: latest.unit, threshold, breached, average: values.reduce((sum, value) => sum + value, 0) / values.length, minimum: Math.min(...values), maximum: Math.max(...values), sampleCount: values.length };
+  });
+}
+
+function Dashboard({ report, onGenerate, generating, points, settings, refreshing, onRefresh }: { report: Report; onGenerate: () => void; generating: boolean; points: MetricSeriesPoint[]; settings: AppSettings; refreshing: boolean; onRefresh: (hours: number, collect?: boolean) => void }) {
+  const [hours, setHours] = useState(24);
+  const dashboardServices = points.length ? liveServices(points, settings) : report.services;
+  const datasourceOptions = [...new Set(dashboardServices.map(service => service.datasourceUid ?? "legacy"))].sort();
   const [datasource, setDatasource] = useState(datasourceOptions[0] ?? "legacy");
   const [job, setJob] = useState("all"); const [instance, setInstance] = useState("all");
   useEffect(() => { if (!datasourceOptions.includes(datasource)) setDatasource(datasourceOptions[0] ?? "legacy"); }, [report.id]);
-  const sourceServices = report.services.filter(service => (service.datasourceUid ?? "legacy") === datasource);
+  const sourceServices = dashboardServices.filter(service => (service.datasourceUid ?? "legacy") === datasource);
   const jobs = [...new Set(sourceServices.map(service => service.job).filter(Boolean) as string[])].sort();
   const instances = [...new Set(sourceServices.map(service => service.instance).filter(Boolean) as string[])].sort();
   const filtered = sourceServices.filter(service => (job === "all" || service.job === job) && (instance === "all" || service.instance === instance));
@@ -106,8 +122,8 @@ function Dashboard({ report, onGenerate, generating }: { report: Report; onGener
   const sourceStatus: Status = filtered.some(service => service.breached && service.score < 50) ? "critical" : filtered.some(service => service.breached) ? "warning" : "healthy";
   return <>
     <div className="grafana-heading"><div><p className="eyebrow">INFRASTRUCTURE / DAILY OVERVIEW</p><h1>服务器运行总览</h1><p>{report.windowStart ? `${report.windowStart} — ${report.windowEnd} · ${report.sampleCount ?? 0} 条采样 · 第 ${report.analysisNumber ?? 1} 次分析` : "历史快照报告"}</p></div><div><span className={`status-pill ${sourceStatus}`}>● 当前数据源健康度 {sourceScore}</span><Button leftSection={generating ? <IconRefresh size={16} className="spin" /> : <IconSparkles size={16} />} onClick={onGenerate} loading={generating}>生成今日日报</Button></div></div>
-    <div className="dashboard-filters"><label><span>数据源</span><select value={datasource} onChange={event => { setDatasource(event.target.value); setJob("all"); setInstance("all"); }}>{datasourceOptions.map(uid => <option key={uid}>{uid}</option>)}</select></label><label><span>Job</span><select value={job} onChange={event => setJob(event.target.value)}><option value="all">全部</option>{jobs.map(value => <option key={value}>{value}</option>)}</select></label><label><span>实例</span><select value={instance} onChange={event => setInstance(event.target.value)}><option value="all">全部</option>{instances.map(value => <option key={value}>{value}</option>)}</select></label><label><span>分析窗口</span><select disabled><option>过去 24 小时</option></select></label><div className="source-lock">● 当前仅展示数据源 <b>{datasource}</b></div></div>
-    <section className="overview-panels"><MetricPanel category="cpu" services={filtered} report={report} /><MetricPanel category="memory" services={filtered} report={report} /><MetricPanel category="disk" services={filtered} report={report} /></section>
+    <div className="dashboard-filters"><label><span>数据源</span><select value={datasource} onChange={event => { setDatasource(event.target.value); setJob("all"); setInstance("all"); }}>{datasourceOptions.map(uid => <option key={uid}>{uid}</option>)}</select></label><label><span>Job</span><select value={job} onChange={event => setJob(event.target.value)}><option value="all">全部</option>{jobs.map(value => <option key={value}>{value}</option>)}</select></label><label><span>实例</span><select value={instance} onChange={event => setInstance(event.target.value)}><option value="all">全部</option>{instances.map(value => <option key={value}>{value}</option>)}</select></label><label><span>时间范围</span><select value={hours} onChange={event => { const value = Number(event.target.value); setHours(value); onRefresh(value); }}><option value={1}>最近 1 小时</option><option value={6}>最近 6 小时</option><option value={12}>最近 12 小时</option><option value={24}>最近 24 小时</option><option value={168}>最近 7 天</option></select></label><button className="dashboard-refresh" disabled={refreshing} onClick={() => onRefresh(hours, true)}><IconRefresh size={14} className={refreshing ? "spin" : ""} />{refreshing ? "采集中" : "立即采集"}</button><div className="source-lock">● 当前仅展示数源 <b>{datasource}</b></div></div>
+    <section className="overview-panels"><MetricPanel category="cpu" services={filtered} points={points.filter(point => point.datasourceUid === datasource && (job === "all" || point.job === job) && (instance === "all" || point.instance === instance))} /><MetricPanel category="memory" services={filtered} points={points.filter(point => point.datasourceUid === datasource && (job === "all" || point.job === job) && (instance === "all" || point.instance === instance))} /><MetricPanel category="disk" services={filtered} points={points.filter(point => point.datasourceUid === datasource && (job === "all" || point.job === job) && (instance === "all" || point.instance === instance))} /></section>
     <section><div className="resource-bar"><b>Resource Details · {datasource}</b><span>{new Set(filtered.map(service => service.instance)).size} 个实例</span></div>{filtered.length ? <ServerOverview services={filtered} /> : <EmptyState title="当前筛选无数据" detail="请切换数据源、Job 或实例。" />}</section>
     <section className="source-summary card"><div><IconSparkles size={18} /><span><b>当前数据源分析</b><small>{datasource}</small></span></div><p>当前筛选共 {filtered.length} 项指标，{filtered.filter(s => s.breached).length ? `其中 ${filtered.filter(s => s.breached).length} 项超过阈值。` : "暂未发现超过阈值的指标。"}</p><div><span><b className="red-text">{filtered.filter(s => s.breached).length}</b>异常</span><span><b>{filtered.length}</b>指标</span></div></section>
     <section><div className="section-title"><div><p className="eyebrow">PRIORITY QUEUE</p><h2>优先处理 · {datasource}</h2></div><span>{filteredIssues.length} 项分析结果</span></div><div className="issues">{filteredIssues.map((i) => <IssueCard issue={i} key={i.id} />)}</div></section>
@@ -174,8 +190,9 @@ function SettingsPage({ initial, section, onSaved }: { initial: AppSettings; sec
 }
 
 export default function WatchDogWorkspace() {
-  const [page, setPage] = useState<Page>("dashboard"); const [reports, setReports] = useState<Report[]>([]); const [events, setEvents] = useState<AlertEvent[]>([]); const [eventsLoading, setEventsLoading] = useState(false); const [selected, setSelected] = useState<Report | null>(null); const [settings, setSettings] = useState(defaultSettings); const [generating, setGenerating] = useState(false); const [generationError, setGenerationError] = useState(""); const [toast, setToast] = useState(""); const [loadError, setLoadError] = useState("");
+  const [page, setPage] = useState<Page>("dashboard"); const [reports, setReports] = useState<Report[]>([]); const [events, setEvents] = useState<AlertEvent[]>([]); const [eventsLoading, setEventsLoading] = useState(false); const [livePoints, setLivePoints] = useState<MetricSeriesPoint[]>([]); const [liveLoading, setLiveLoading] = useState(false); const [selected, setSelected] = useState<Report | null>(null); const [settings, setSettings] = useState(defaultSettings); const [generating, setGenerating] = useState(false); const [generationError, setGenerationError] = useState(""); const [toast, setToast] = useState(""); const [loadError, setLoadError] = useState("");
   const refreshEvents = async () => { setEventsLoading(true); try { setEvents(await listAlertEvents()); } catch (error) { setLoadError(errorMessage(error, "读取告警历史失败")); } finally { setEventsLoading(false); } };
+  const refreshDashboard = async (hours = 24, collect = false) => { setLiveLoading(true); setLoadError(""); try { if (collect) { const result = await runMonitorNow(settings); if (result.errors.length) setLoadError(`部分指标采集失败：${result.errors.join("；")}`); } setLivePoints(await listMetricSeries(hours)); } catch (error) { setLoadError(errorMessage(error, "实时数据采集失败")); } finally { setLiveLoading(false); } };
   useEffect(() => { listReports().then(setReports).catch(error => setLoadError(errorMessage(error, "读取日报失败"))); loadSettings().then(setSettings).catch(error => setLoadError(errorMessage(error, "读取设置失败"))); refreshEvents(); }, []);
   useEffect(() => {
     if (!settings.monitorEnabled) return;
@@ -186,6 +203,12 @@ export default function WatchDogWorkspace() {
     const timer = window.setInterval(refresh, Math.max(1, settings.monitorIntervalMinutes) * 60_000);
     return () => window.clearInterval(timer);
   }, [settings.monitorEnabled, settings.monitorIntervalMinutes]);
+  useEffect(() => {
+    if (!settings.selectedDatasourceUids.length) return;
+    refreshDashboard(24, true);
+    const timer = window.setInterval(() => refreshDashboard(24, true), Math.max(1, settings.monitorIntervalMinutes) * 60_000);
+    return () => window.clearInterval(timer);
+  }, [settings.grafanaUrl, settings.selectedDatasourceUids.join("|"), settings.monitorIntervalMinutes]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false; const cleanups: (() => void)[] = [];
@@ -210,5 +233,5 @@ export default function WatchDogWorkspace() {
   const title = useMemo(() => nav.find(n => n.id === page)?.label, [page]);
   const run = async () => { setGenerating(true); setGenerationError(""); try { const next = await generateReport(); setReports(old => [next, ...old.filter(r => r.id !== next.id)]); setSelected(next); setToast("今日日报生成完成"); setTimeout(() => setToast(""), 6000); } catch (error) { setGenerationError(errorMessage(error, "日报生成失败")); } finally { setGenerating(false); } };
   const navigate = (p: Page) => { setPage(p); if (p !== "reports") setSelected(null); };
-  return <div className="app"><aside className="sidebar"><div className="brand"><WatchDogMark /><div><b>Grafana Watch Dog</b><small>AIOPS CONTROL</small></div></div><nav>{nav.map(n => { const NavIcon = icons[n.id]; return <button key={n.id} className={page === n.id ? "active" : ""} onClick={() => navigate(n.id)}><i><NavIcon size={17} /></i>{n.label}</button>; })}</nav><div className="sidebar-bottom"><div className="connection"><i /><span><b>{settings.monitorEnabled ? "监控运行中" : "监控未启用"}</b><small>{settings.monitorEnabled ? `每 ${settings.monitorIntervalMinutes} 分钟检查` : "等待 Grafana 配置"}</small></span></div><button className="profile"><span>CF</span><div><b>Ops Admin</b><small>本地工作区</small></div><i>•••</i></button></div></aside><main><header><button className="mobile-brand"><WatchDogMark size={25} /></button><span>{title}</span><div><span className="readonly"><i />只读模式</span><Tooltip label="刷新"><button className="icon-btn" aria-label="刷新"><IconRefresh size={15} /></button></Tooltip></div></header><div className="content">{loadError && <div className="load-error">{loadError}</div>}{generationError && <div className="load-error">日报生成失败：{generationError}</div>}{page === "dashboard" && (report ? <Dashboard report={report} onGenerate={run} generating={generating} /> : <><div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW</p><h1>运行总览</h1><p>仅展示实际采集并持久化的运行数据。</p></div></div><EmptyState title="暂无真实运行数据" detail="请先配置 Grafana MCP 和 Prometheus 数据源 UID，然后启用自动日报或执行立即生成。" action={<Button loading={generating} onClick={run}>立即采集并生成</Button>} /></>)}{page === "reports" && !selected && <Reports reports={reports} onSelect={setSelected} />}{page === "reports" && selected && <><button className="back" onClick={() => setSelected(null)}>← 返回日报历史</button><Dashboard report={selected} onGenerate={run} generating={generating} /></>}{page === "alerts" && <Alerts events={events} loading={eventsLoading} onRefresh={refreshEvents} />}{page === "analysis" && <Analysis settings={settings} />}{page === "mcp" && <SettingsPage initial={settings} section="mcp" onSaved={setSettings} />}{page === "settings" && <SettingsPage initial={settings} section="settings" onSaved={setSettings} />}</div></main>{toast && <div className="toast">{toast}</div>}</div>;
+  return <div className="app"><aside className="sidebar"><div className="brand"><WatchDogMark /><div><b>Grafana Watch Dog</b><small>AIOPS CONTROL</small></div></div><nav>{nav.map(n => { const NavIcon = icons[n.id]; return <button key={n.id} className={page === n.id ? "active" : ""} onClick={() => navigate(n.id)}><i><NavIcon size={17} /></i>{n.label}</button>; })}</nav><div className="sidebar-bottom"><div className="connection"><i /><span><b>{settings.monitorEnabled ? "监控运行中" : "监控未启用"}</b><small>{settings.monitorEnabled ? `每 ${settings.monitorIntervalMinutes} 分钟检查` : "等待 Grafana 配置"}</small></span></div><button className="profile"><span>CF</span><div><b>Ops Admin</b><small>本地工作区</small></div><i>•••</i></button></div></aside><main><header><button className="mobile-brand"><WatchDogMark size={25} /></button><span>{title}</span><div><span className="readonly"><i />只读模式</span><Tooltip label="刷新"><button className="icon-btn" aria-label="刷新" onClick={() => refreshDashboard(24, true)}><IconRefresh size={15} className={liveLoading ? "spin" : ""} /></button></Tooltip></div></header><div className="content">{loadError && <div className="load-error">{loadError}</div>}{generationError && <div className="load-error">日报生成失败：{generationError}</div>}{page === "dashboard" && (report ? <Dashboard report={report} onGenerate={run} generating={generating} points={livePoints} settings={settings} refreshing={liveLoading} onRefresh={refreshDashboard} /> : <><div className="page-title"><div><p className="eyebrow">DAILY OVERVIEW</p><h1>运行总览</h1><p>仅展示实际采集并持久化的运行数据。</p></div></div><EmptyState title="暂无真实运行数据" detail="请先配置 Grafana MCP 和 Prometheus 数据源 UID，然后启用自动日报或执行立即生成。" action={<Button loading={generating} onClick={run}>立即采集并生成</Button>} /></>)}{page === "reports" && !selected && <Reports reports={reports} onSelect={setSelected} />}{page === "reports" && selected && <><button className="back" onClick={() => setSelected(null)}>← 返回日报历史</button><Dashboard report={selected} onGenerate={run} generating={generating} points={livePoints} settings={settings} refreshing={liveLoading} onRefresh={refreshDashboard} /></>}{page === "alerts" && <Alerts events={events} loading={eventsLoading} onRefresh={refreshEvents} />}{page === "analysis" && <Analysis settings={settings} />}{page === "mcp" && <SettingsPage initial={settings} section="mcp" onSaved={setSettings} />}{page === "settings" && <SettingsPage initial={settings} section="settings" onSaved={setSettings} />}</div></main>{toast && <div className="toast">{toast}</div>}</div>;
 }
