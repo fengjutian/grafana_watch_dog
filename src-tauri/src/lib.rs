@@ -19,8 +19,7 @@ use mcp::{
     install_official_server, GrafanaMcpClient, GrafanaMcpConfig, InstallResult, ToolSummary,
 };
 use monitor::{
-    evaluate, extract_metric_samples, AlertEvent, AlertRule, AlertState,
-    Comparison, MetricSample,
+    evaluate, extract_metric_samples, AlertEvent, AlertRule, AlertState, Comparison, MetricSample,
 };
 
 struct Database(Mutex<Connection>);
@@ -864,7 +863,7 @@ fn generate_and_store_report(
 }
 
 #[tauri::command]
-fn generate_report(
+async fn generate_report(
     app: tauri::AppHandle,
     runtime: State<'_, RuntimeSettings>,
 ) -> Result<Value, String> {
@@ -873,7 +872,9 @@ fn generate_report(
         .lock()
         .map_err(|_| "运行时设置锁异常".to_string())?
         .clone();
-    generate_and_store_report(&app, &settings)
+    tauri::async_runtime::spawn_blocking(move || generate_and_store_report(&app, &settings))
+        .await
+        .map_err(|error| format!("日报生成任务异常结束：{error}"))?
 }
 
 #[tauri::command]

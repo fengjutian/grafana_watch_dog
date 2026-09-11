@@ -4,7 +4,12 @@ use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    thread,
+    time::Duration,
 };
+
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct GrafanaMcpConfig {
@@ -24,7 +29,7 @@ pub struct ToolSummary {
 pub struct GrafanaMcpClient {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    responses: Receiver<Result<JsonRpcResponse, String>>,
     next_id: u64,
 }
 
@@ -46,11 +51,12 @@ impl GrafanaMcpClient {
             .spawn()
             .map_err(|error| format!("无法启动官方 mcp-grafana：{error}"))?;
         let stdin = child.stdin.take().ok_or("无法连接 MCP stdin")?;
-        let stdout = BufReader::new(child.stdout.take().ok_or("无法连接 MCP stdout")?);
+        let stdout = child.stdout.take().ok_or("无法连接 MCP stdout")?;
+        let responses = Self::read_responses(stdout);
         let mut client = Self {
             child,
             stdin,
-            stdout,
+            responses,
             next_id: 1,
         };
         client.initialize()?;
@@ -124,17 +130,18 @@ impl GrafanaMcpClient {
             params: Some(params),
         })?;
         loop {
-            let mut line = String::new();
-            let bytes = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|e| format!("读取 MCP 响应失败：{e}"))?;
-            if bytes == 0 {
-                return Err("mcp-grafana 在响应前退出".into());
-            }
-            let response: JsonRpcResponse = match serde_json::from_str(&line) {
-                Ok(value) => value,
-                Err(_) => continue,
+            let response = match self.responses.recv_timeout(RESPONSE_TIMEOUT) {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => return Err(error),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "MCP 请求 {method} 超过 {} 秒未响应",
+                        RESPONSE_TIMEOUT.as_secs()
+                    ))
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("mcp-grafana 响应通道已断开".into())
+                }
             };
             if response.id != Some(id) {
                 continue;
@@ -144,6 +151,34 @@ impl GrafanaMcpClient {
             }
             return response.result.ok_or("MCP 响应缺少 result".into());
         }
+    }
+
+    fn read_responses(stdout: ChildStdout) -> Receiver<Result<JsonRpcResponse, String>> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match stdout.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = sender.send(Err("mcp-grafana 在响应前退出".into()));
+                        break;
+                    }
+                    Ok(_) => {
+                        if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&line) {
+                            if sender.send(Ok(response)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(format!("读取 MCP 响应失败：{error}")));
+                        break;
+                    }
+                }
+            }
+        });
+        receiver
     }
 
     fn notify(&mut self, method: &str, params: Option<Value>) -> Result<(), String> {

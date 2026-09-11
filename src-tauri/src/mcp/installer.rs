@@ -31,42 +31,32 @@ pub fn install_official_server(tools_dir: &Path) -> Result<InstallResult, String
         });
     }
 
-    // uvx is the official least-setup path. Its first run downloads and caches the package.
-    if command_works("uvx", &["mcp-grafana", "--help"]) {
+    if command_works("go", &["version"]) {
+        fs::create_dir_all(tools_dir).map_err(|e| format!("无法创建工具目录：{e}"))?;
+        let output = Command::new("go")
+            .args(["install", GO_PACKAGE])
+            .env("GOBIN", tools_dir)
+            .output()
+            .map_err(|e| format!("无法启动 go install：{e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("安装 mcp-grafana 失败：{}", stderr.trim()));
+        }
+        let binary = tools_dir.join(if cfg!(windows) {
+            "mcp-grafana.exe"
+        } else {
+            "mcp-grafana"
+        });
+        if !binary.exists() {
+            return Err("go install 已完成，但没有找到 mcp-grafana 二进制文件".into());
+        }
         return Ok(InstallResult {
-            command: "uvx".into(),
-            args_prefix: vec!["mcp-grafana".into()],
-            method: "uvx".into(),
-            message: "已通过官方 uvx 方式准备 mcp-grafana".into(),
+            command: binary.to_string_lossy().into_owned(),
+            args_prefix: vec![],
+            method: "go".into(),
+            message: "已将 mcp-grafana 持久安装到应用工具目录".into(),
         });
     }
 
-    if !command_works("go", &["version"]) {
-        return Err("未找到 uvx 或 Go。请先安装 uv（推荐）或 Go，然后再次点击安装。".into());
-    }
-
-    fs::create_dir_all(tools_dir).map_err(|e| format!("无法创建工具目录：{e}"))?;
-    let output = Command::new("go")
-        .args(["install", GO_PACKAGE])
-        .env("GOBIN", tools_dir)
-        .output()
-        .map_err(|e| format!("无法启动 go install：{e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("安装 mcp-grafana 失败：{}", stderr.trim()));
-    }
-    let binary = tools_dir.join(if cfg!(windows) {
-        "mcp-grafana.exe"
-    } else {
-        "mcp-grafana"
-    });
-    if !binary.exists() {
-        return Err("go install 已完成，但没有找到 mcp-grafana 二进制文件".into());
-    }
-    Ok(InstallResult {
-        command: binary.to_string_lossy().into_owned(),
-        args_prefix: vec![],
-        method: "go".into(),
-        message: "已将官方 mcp-grafana 安装到应用工具目录".into(),
-    })
+    Err("未找到 Go，无法持久安装 mcp-grafana。请先安装 Go 后再试。".into())
 }
