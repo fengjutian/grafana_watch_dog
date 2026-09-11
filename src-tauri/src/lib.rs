@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::PathBuf,
+    process::Command,
     sync::Mutex,
     thread,
     time::{Duration, Instant},
@@ -516,13 +517,26 @@ fn diagnose_connection(settings: AppSettings) -> ConnectionDiagnostic {
 }
 
 fn mcp_config(settings: &AppSettings) -> GrafanaMcpConfig {
+    let mut args: Vec<String> = settings
+        .mcp_args
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    let persistent_binary_available = settings.mcp_command == "uvx"
+        && args.first().is_some_and(|arg| arg == "mcp-grafana")
+        && Command::new("mcp-grafana")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+    let command = if persistent_binary_available {
+        args.remove(0);
+        "mcp-grafana".to_owned()
+    } else {
+        settings.mcp_command.clone()
+    };
     GrafanaMcpConfig {
-        command: settings.mcp_command.clone(),
-        args: settings
-            .mcp_args
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect(),
+        command,
+        args,
         grafana_url: settings.grafana_url.clone(),
         service_account_token: settings.grafana_token.clone(),
     }
